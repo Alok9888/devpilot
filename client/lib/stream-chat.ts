@@ -43,7 +43,9 @@ export async function streamChatMessage(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let receivedReply = false;
+  let receivedDone = false;
+  let receivedOutcome = false;
+  let streamError: string | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -74,15 +76,17 @@ export async function streamChatMessage(
       if (!data) continue;
 
       // Surface backend/model failures rather than treating a closed stream as success.
-      if (event === "chat_error") {
+      if (event === "chat_error" || event === "error") {
+        receivedOutcome = true;
         let message = "Chat generation failed. Check the backend logs for details.";
         try {
-          const payload = JSON.parse(data) as { message?: string };
+          const payload = JSON.parse(data) as { message?: string; type?: string };
           if (payload.message) message = payload.message;
         } catch {
           // Keep the generic message if the event payload is not JSON.
         }
-        throw new Error(message);
+        streamError = message;
+        continue;
       }
 
       try {
@@ -91,11 +95,10 @@ export async function streamChatMessage(
         } else if (event === "user_message") {
           handlers.onUserMessage?.(JSON.parse(data) as ChatMessage);
         } else if (event === "assistant_message") {
-          receivedReply = true;
+          receivedOutcome = true;
           handlers.onAssistantMessage?.(JSON.parse(data) as ChatMessage);
         } else if (event === "done") {
-          receivedReply = true;
-          handlers.onDone?.();
+          receivedDone = true;
         }
       } catch (err) {
         handlers.onError?.(
@@ -105,8 +108,11 @@ export async function streamChatMessage(
     }
   }
 
-  if (!receivedReply) {
-    throw new Error("The chat stream ended before the assistant replied. Please try again.");
+  if (streamError) {
+    throw new Error(streamError);
+  }
+  if (!receivedOutcome || !receivedDone) {
+    throw new Error("The chat stream ended without a reply or terminal event. Please try again.");
   }
   handlers.onDone?.();
 }
