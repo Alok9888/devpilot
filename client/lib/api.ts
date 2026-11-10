@@ -49,6 +49,7 @@ export type ChatMessage = {
   content: string;
   citations: Citation[];
   createdAt: string;
+  responseModel?: { model: string; fallback: boolean };
 };
 
 

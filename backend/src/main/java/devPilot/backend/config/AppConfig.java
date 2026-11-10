@@ -6,6 +6,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.web.client.RestClient;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.core.retry.RetryTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import java.time.Duration;
@@ -13,6 +15,12 @@ import java.time.Duration;
 @Configuration
 @EnableAsync
 public class AppConfig {
+    @Bean
+    RetryTemplate genAiSingleAttemptRetryTemplate() {
+        // Quota fallback is model-to-model; repeating the same request burns latency and quota.
+        return new RetryTemplate(RetryPolicy.withMaxRetries(0));
+    }
+
     @Bean
     RestClient.Builder restClientBuilder() {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();

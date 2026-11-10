@@ -24,11 +24,15 @@ export function ChatMessages({
   messages,
   streamText,
   isLoading,
+  streamError,
+  onRetry,
 }: {
   repo: Repository;
   messages: ChatMessage[];
   streamText?: string;
   isLoading?: boolean;
+  streamError?: { code?: string; message: string; triedModels?: string[]; retryAfter?: string } | null;
+  onRetry?: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -97,9 +101,12 @@ export function ChatMessages({
                       )}
                     </BubbleContent>
                   </Bubble>
-                  {!isUser && message.citations?.length > 0 && (
+                  {!isUser && (message.citations?.length > 0 || message.responseModel?.fallback) && (
                     <MessageFooter>
-                      <CitationChips repo={repo} citations={message.citations} />
+                      {message.citations?.length > 0 && <CitationChips repo={repo} citations={message.citations} />}
+                      {message.responseModel?.fallback && (
+                        <span>Answered with {message.responseModel.model} (fallback, primary quota exceeded)</span>
+                      )}
                     </MessageFooter>
                   )}
                 </MessageContent>
@@ -127,6 +134,18 @@ export function ChatMessages({
             </Message>
           )}
         </MessageGroup>
+        {streamError && (
+          <div role="alert" className={cn("rounded-xl border p-4 text-sm", streamError.code === "QUOTA_EXCEEDED" ? "border-amber-500/50 bg-amber-500/10 text-amber-950 dark:text-amber-100" : "border-destructive/40 bg-destructive/5")}>
+            <p className="font-semibold">
+              {streamError.code === "QUOTA_EXCEEDED" ? "⚠️ Gemini daily quota exceeded" : streamError.code === "MODEL_OVERLOADED" ? "Gemini is overloaded, retrying..." : "Failed to generate content"}
+            </p>
+            <p className="mt-1">{streamError.message}</p>
+            {streamError.code === "QUOTA_EXCEEDED" && (
+              <p className="mt-1 text-xs">Tried: {(streamError.triedModels ?? []).join(", ")}{streamError.retryAfter ? ` • Retry in ${streamError.retryAfter}` : ""}</p>
+            )}
+            {onRetry && <button type="button" className="mt-3 rounded-md border px-3 py-1.5 font-medium hover:bg-background/60" onClick={onRetry}>{streamError.code === "MODEL_OVERLOADED" ? "Retry" : "Try again"}</button>}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </ScrollArea>

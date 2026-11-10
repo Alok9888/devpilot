@@ -25,6 +25,7 @@ public class CodeContextRetriever {
     private final CitationMapper citationMapper;
     private final EmbeddingModel embeddingModel;
     private final JdbcTemplate jdbcTemplate;
+    private final FallbackEmbeddingVectorStore fallbackEmbeddingVectorStore;
 
     public int embeddingDimensions() {
         return embeddingModel.dimensions();
@@ -45,9 +46,23 @@ public class CodeContextRetriever {
         // PgVectorStore uses this shared JdbcTemplate for its SELECT. Keep database-side
         // vector searches bounded independently from the embedding request budget.
         jdbcTemplate.setQueryTimeout(10);
-        var documents = vectorStore.similaritySearch(search);
+        java.util.List<Document> documents;
+        boolean usedFallbackEmbedding = false;
+        try {
+            documents = vectorStore.similaritySearch(search);
+        } catch (RuntimeException embeddingError) {
+            if (!isQuotaError(embeddingError)) throw embeddingError;
+            log.warn("{} [EMBED] primary embedding quota exhausted; trying text-embedding-004 repo={}", Instant.now(), repositoryId);
+            usedFallbackEmbedding = true;
+            documents = fallbackSearch(search, repositoryId);
+        }
         if (documents == null) {
             documents = java.util.List.of();
+        }
+        if (documents.isEmpty() && !usedFallbackEmbedding) {
+            log.info("{} [VECTOR] primary result empty; trying text-embedding-004 repo={}", Instant.now(), repositoryId);
+            documents = fallbackSearch(search, repositoryId);
+            if (documents == null) documents = java.util.List.of();
         }
         log.info("{} [VECTOR] found {} results repo={}", Instant.now(), documents.size(), repositoryId);
 
@@ -65,5 +80,24 @@ public class CodeContextRetriever {
         }
 
         return new RetrievedContext(citations, contextText);
+    }
+
+    private static boolean isQuotaError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("429") || message.contains("quota_exceeded") || message.contains("resource_exhausted")) return true;
+        }
+        return false;
+    }
+
+    private java.util.List<Document> fallbackSearch(SearchRequest search, UUID repositoryId) {
+        try {
+            var documents = fallbackEmbeddingVectorStore.similaritySearch(search);
+            return documents == null ? java.util.List.of() : documents;
+        } catch (RuntimeException fallbackError) {
+            log.warn("{} [EMBED] text-embedding-004 fallback failed; continuing without code context repo={}: {}",
+                    Instant.now(), repositoryId, fallbackError.getMessage());
+            return java.util.List.of();
+        }
     }
 }

@@ -9,6 +9,7 @@ export type StreamChatHandlers = {
   onAssistantMessage?: (message: ChatMessage) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
+  onModel?: (model: string, fallback: boolean) => void;
   signal?: AbortSignal;
 };
 
@@ -88,7 +89,7 @@ export async function streamChatMessage(
     let buffer = "";
     let receivedDone = false;
     let receivedOutcome = false;
-    let streamError: string | null = null;
+    let streamError: (Error & { code?: string; model?: string; triedModels?: string[]; retryAfter?: string; retryAfterSeconds?: number }) | null = null;
 
     while (true) {
       streamTimer = setTimeout(() => {
@@ -130,13 +131,15 @@ export async function streamChatMessage(
         if (event === "chat_error" || event === "error") {
           receivedOutcome = true;
           let message = "Chat generation failed. Check the backend logs for details.";
+          let payload: { message?: string; type?: string; code?: string; model?: string; triedModels?: string[]; retryAfter?: string; retryAfterSeconds?: number } = {};
           try {
-            const payload = JSON.parse(data) as { message?: string; type?: string };
+            payload = JSON.parse(data);
             if (payload.message) message = payload.message;
           } catch {
             // Keep the generic message if the event payload is not JSON.
           }
-          streamError = message;
+          streamError = Object.assign(new Error(message), payload);
+          handlers.onError?.(streamError);
           continue;
         }
 
@@ -151,6 +154,10 @@ export async function streamChatMessage(
             handlers.onAssistantMessage?.(message);
           } else if (event === "done") {
             receivedDone = true;
+            handlers.onDone?.();
+          } else if (event === "model") {
+            const payload = JSON.parse(data) as { model?: string; fallback?: boolean };
+            if (payload.model) handlers.onModel?.(payload.model, Boolean(payload.fallback));
           }
         } catch (err) {
           const parseError = err instanceof Error ? err : new Error("Failed to parse SSE event");
@@ -158,15 +165,17 @@ export async function streamChatMessage(
           throw parseError;
         }
       }
+      if (receivedDone) {
+        await reader.cancel();
+        break;
+      }
     }
 
-    if (streamError) {
-      throw new Error(streamError);
-    }
+    if (streamError) throw streamError;
     if (!receivedOutcome || !receivedDone) {
       throw new Error("The chat stream ended without a reply or terminal event. Please try again.");
     }
-    handlers.onDone?.();
+    if (!receivedDone) handlers.onDone?.();
   } catch (err) {
     if (timedOut === "response") {
       throw new Error("Chat timed out before the server opened the stream. Please try again.");

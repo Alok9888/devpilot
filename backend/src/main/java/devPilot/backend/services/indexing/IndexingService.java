@@ -19,6 +19,7 @@ import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.RepositoryRepository;
 import devPilot.backend.services.ai.RagSettings;
+import devPilot.backend.services.ai.FallbackEmbeddingVectorStore;
 import devPilot.backend.services.github.GitHubRateLimiter;
 import devPilot.backend.services.github.GithubApiClient;
 import jakarta.transaction.Transactional;
@@ -38,6 +39,7 @@ public class IndexingService {
     private final CodeChunker codeChunker;
     private final GitHubRateLimiter rateLimiter;
     private final VectorStore vectorStore;
+    private final FallbackEmbeddingVectorStore fallbackEmbeddingVectorStore;
 
     @Value("${app.indexing.max-file-bytes:102400}")
     private long maxFileBytes;
@@ -84,6 +86,7 @@ public class IndexingService {
         updateProgress(repoId, filePaths.size(), 0, 0, IndexStatus.INDEXING, null);
 
         List<Document> batch = new ArrayList<>();
+        boolean primaryEmbeddingUnavailable = false;
         int processed = 0;
         int totalChunks = 0;
 
@@ -96,7 +99,15 @@ public class IndexingService {
                 totalChunks += chunks.size();
                 if (batch.size() >= VECTOR_BATCH_SIZE) {
                     log.info("{} [INDEX] vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
-                    vectorStore.add(batch);
+                    fallbackEmbeddingVectorStore.add(batch);
+                    if (!primaryEmbeddingUnavailable) {
+                        try { vectorStore.add(batch); }
+                        catch (Exception embeddingError) {
+                            primaryEmbeddingUnavailable = true;
+                            log.warn("{} [EMBED] primary embedding failed during indexing; using text-embedding-004 vectors repoId={}: {}",
+                                    Instant.now(), repoId, embeddingError.getMessage());
+                        }
+                    }
                     log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
                     batch.clear();
                 }
@@ -113,7 +124,15 @@ public class IndexingService {
 
         if (!batch.isEmpty()) {
             log.info("{} [INDEX] final vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
-            vectorStore.add(batch);
+            fallbackEmbeddingVectorStore.add(batch);
+            if (!primaryEmbeddingUnavailable) {
+                try { vectorStore.add(batch); }
+                catch (Exception embeddingError) {
+                    primaryEmbeddingUnavailable = true;
+                    log.warn("{} [EMBED] primary embedding failed during final indexing batch; text-embedding-004 vectors retained repoId={}: {}",
+                            Instant.now(), repoId, embeddingError.getMessage());
+                }
+            }
             log.info("{} [INDEX] final vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
         }
 
@@ -144,6 +163,7 @@ public class IndexingService {
             var filter = new FilterExpressionBuilder().eq(RagSettings.METADATA_REPO_ID, repoId).build();
             log.info("{} [INDEX] deleting existing vectors repoId={}", Instant.now(), repoId);
             vectorStore.delete(filter);
+            fallbackEmbeddingVectorStore.delete(filter);
             log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
         } catch (Exception ex) {
             log.error("Could not delete existing vectors for repo {}", repoId, ex);

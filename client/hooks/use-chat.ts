@@ -53,6 +53,10 @@ export function useStreamChat(sessionId: string | null) {
   const queryClient = useQueryClient();
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState("");
+  const [streamError, setStreamError] = useState<{
+    code?: string; message: string; triedModels?: string[]; retryAfter?: string;
+  } | null>(null);
+  const [lastContent, setLastContent] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
   const send = useCallback(
@@ -79,6 +83,10 @@ export function useStreamChat(sessionId: string | null) {
 
       setStreaming(true);
       setStreamText("");
+      setStreamError(null);
+      setLastContent(content.trim());
+      let responseModel: { model: string; fallback: boolean } | null = null;
+      let serverReportedError = false;
 
       try {
         await streamChatMessage(sessionId, content.trim(), {
@@ -96,36 +104,44 @@ export function useStreamChat(sessionId: string | null) {
             setStreamText((prev) => prev + token);
           },
           onAssistantMessage: (message) => {
+            const enriched = responseModel ? Object.assign({}, message, { responseModel }) : message;
             queryClient.setQueryData<ChatMessage[]>(
               queryKeys.chat.messages(sessionId),
-              (prev) => [...(prev ?? []), message]
+              (prev) => [...(prev ?? []), enriched]
             );
             setStreamText("");
           },
+          onModel: (model, fallback) => { responseModel = { model, fallback }; },
+          onError: (error) => {
+            serverReportedError = true;
+            setStreaming(false);
+            const structured = error as Error & { code?: string; triedModels?: string[]; retryAfter?: string };
+            setStreamError({ code: structured.code, message: structured.message, triedModels: structured.triedModels, retryAfter: structured.retryAfter });
+            setStreamText("");
+          },
+          onDone: () => setStreaming(false),
         });
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        toast.add({
-          title: "Message failed",
-          description: err instanceof Error ? err.message : "Unknown error",
-          type: "error",
-        });
-        queryClient.setQueryData<ChatMessage[]>(
-          queryKeys.chat.messages(sessionId),
-          (prev) => (prev ?? []).filter((m) => m.id !== optimisticId)
-        );
+        if (!serverReportedError) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          setStreamError({ message });
+          toast.add({ title: "Message failed", description: message, type: "error" });
+        }
         setStreamText("");
       } finally {
         setStreaming(false);
       }
     },
-    [sessionId, streaming, queryClient]
+    [sessionId, streaming, queryClient, streamError]
   );
+
+  const retry = useCallback(() => { if (lastContent) void send(lastContent); }, [lastContent, send]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
     setStreaming(false);
   }, []);
 
-  return { send, stop, streaming, streamText };
+  return { send, stop, retry, streaming, streamText, streamError };
 }
