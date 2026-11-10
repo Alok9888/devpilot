@@ -105,7 +105,7 @@ export function ChatMessages({
                     <MessageFooter>
                       {message.citations?.length > 0 && <CitationChips repo={repo} citations={message.citations} />}
                       {message.responseModel?.fallback && (
-                        <span>Answered with {message.responseModel.model} (fallback, primary quota exceeded)</span>
+                        <span>Answered with {message.responseModel.provider ?? "AI"} {message.responseModel.model} (fallback; primary model unavailable)</span>
                       )}
                     </MessageFooter>
                   )}
@@ -137,7 +137,7 @@ export function ChatMessages({
         {streamError && (
           <div role="alert" className={cn("rounded-xl border p-4 text-sm", streamError.code === "QUOTA_EXCEEDED" ? "border-amber-500/50 bg-amber-500/10 text-amber-950 dark:text-amber-100" : "border-destructive/40 bg-destructive/5")}>
             <p className="font-semibold">
-              {streamError.code === "QUOTA_EXCEEDED" ? "⚠️ Gemini daily quota exceeded" : streamError.code === "MODEL_OVERLOADED" ? "Gemini is overloaded, retrying..." : "Failed to generate content"}
+              {streamError.code === "QUOTA_EXCEEDED" ? "⚠️ Groq daily quota exceeded" : streamError.code === "MODEL_OVERLOADED" ? "Groq is overloaded, retrying..." : "Failed to generate content"}
             </p>
             <p className="mt-1">{streamError.message}</p>
             {streamError.code === "QUOTA_EXCEEDED" && (

@@ -49,7 +49,7 @@ export type ChatMessage = {
   content: string;
   citations: Citation[];
   createdAt: string;
-  responseModel?: { model: string; fallback: boolean };
+  responseModel?: { model: string; fallback: boolean; provider?: string };
 };
 
 

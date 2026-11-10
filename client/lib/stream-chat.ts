@@ -9,7 +9,7 @@ export type StreamChatHandlers = {
   onAssistantMessage?: (message: ChatMessage) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
-  onModel?: (model: string, fallback: boolean) => void;
+  onModel?: (model: string, fallback: boolean, provider?: string) => void;
   signal?: AbortSignal;
 };
 
@@ -156,8 +156,8 @@ export async function streamChatMessage(
             receivedDone = true;
             handlers.onDone?.();
           } else if (event === "model") {
-            const payload = JSON.parse(data) as { model?: string; fallback?: boolean };
-            if (payload.model) handlers.onModel?.(payload.model, Boolean(payload.fallback));
+            const payload = JSON.parse(data) as { model?: string; fallback?: boolean; provider?: string };
+            if (payload.model) handlers.onModel?.(payload.model, Boolean(payload.fallback), payload.provider);
           }
         } catch (err) {
           const parseError = err instanceof Error ? err : new Error("Failed to parse SSE event");

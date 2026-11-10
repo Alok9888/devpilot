@@ -85,7 +85,7 @@ export function useStreamChat(sessionId: string | null) {
       setStreamText("");
       setStreamError(null);
       setLastContent(content.trim());
-      let responseModel: { model: string; fallback: boolean } | null = null;
+      let responseModel: { model: string; fallback: boolean; provider?: string } | null = null;
       let serverReportedError = false;
 
       try {
@@ -111,7 +111,7 @@ export function useStreamChat(sessionId: string | null) {
             );
             setStreamText("");
           },
-          onModel: (model, fallback) => { responseModel = { model, fallback }; },
+          onModel: (model, fallback, provider) => { responseModel = { model, fallback, provider }; },
           onError: (error) => {
             serverReportedError = true;
             setStreaming(false);

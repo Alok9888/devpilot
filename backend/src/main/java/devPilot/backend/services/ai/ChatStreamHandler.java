@@ -18,7 +18,7 @@ import java.util.function.Supplier;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -31,26 +31,25 @@ import devPilot.backend.dto.ChatMessageResponse;
 import devPilot.backend.entity.ChatMessage;
 import devPilot.backend.entity.MessageRole;
 import devPilot.backend.repository.ChatMessageRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /** Owns the complete chat request and guarantees a terminal SSE event on every path. */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class ChatStreamHandler {
 
     private static final long EMBEDDING_TIMEOUT_SECONDS = 15;
-    private static final long GEMINI_TIMEOUT_SECONDS = 60;
+    private static final long CHAT_TIMEOUT_SECONDS = 60;
 
-    private final ChatModel chatModel;
+    private final ChatModel groqChatModel;
+    private final ChatModel geminiFallbackChatModel;
     private final ChatMessageRepository chatMessageRepository;
     private final CitationMapper citationMapper;
     private final CodeContextRetriever codeContextRetriever;
     private final ChatPromptBuilder chatPromptBuilder;
 
-    @Value("${app.gemini.chat.models}")
-    private String configuredChatModels;
+    @Value("${app.groq.chat.models}")
+    private String configuredGroqModels;
 
     @Autowired
     @Qualifier("chatExecutor")
@@ -59,6 +58,21 @@ public class ChatStreamHandler {
     @Autowired
     @Qualifier("ragExecutor")
     private ThreadPoolTaskExecutor ragExecutor;
+
+    public ChatStreamHandler(
+            @Qualifier("openAiChatModel") ChatModel groqChatModel,
+            @Qualifier("geminiFallbackChatModel") ChatModel geminiFallbackChatModel,
+            ChatMessageRepository chatMessageRepository,
+            CitationMapper citationMapper,
+            CodeContextRetriever codeContextRetriever,
+            ChatPromptBuilder chatPromptBuilder) {
+        this.groqChatModel = groqChatModel;
+        this.geminiFallbackChatModel = geminiFallbackChatModel;
+        this.chatMessageRepository = chatMessageRepository;
+        this.citationMapper = citationMapper;
+        this.codeContextRetriever = codeContextRetriever;
+        this.chatPromptBuilder = chatPromptBuilder;
+    }
 
     public SseEmitter stream(
             UUID requestedSessionId,
@@ -144,50 +158,75 @@ public class ChatStreamHandler {
                     ? "No relevant code found, answering from general context.\n\n" + question
                     : chatPromptBuilder.userPrompt(retrievedContext.contextText(), question);
 
-            stage.set("GEMINI");
+            stage.set("AI");
             List<String> triedModels = new ArrayList<>();
             List<String> tokens = null;
             String successfulModel = null;
+            String successfulProvider = null;
             Throwable lastModelError = null;
             boolean sawQuotaFailure = false;
-            List<String> models = Arrays.stream(configuredChatModels.split(","))
+            List<String> models = Arrays.stream(configuredGroqModels.split(","))
                     .map(String::trim).filter(model -> !model.isEmpty()).toList();
-            if (models.isEmpty()) models = List.of("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash");
+            if (models.isEmpty()) models = List.of("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b");
             for (String model : models) {
                 triedModels.add(model);
                 try {
-                    log.info("{} [GEMINI] start sessionId={} model={}", now(), sessionId, model);
-                    tokens = ChatClient.builder(chatModel).build().prompt()
-                            .options(ChatOptions.builder().model(model))
+                    String shortModel = shortModel(model);
+                    log.info("{} [AI] provider=Groq model={} modelId={} sessionId={}", now(), shortModel, model, sessionId);
+                    tokens = ChatClient.builder(groqChatModel).build().prompt()
+                            .options(OpenAiChatOptions.builder().model(model))
                             .system(chatPromptBuilder.systemPrompt(streamContext.repositoryName()))
                             .user(prompt).stream().content().collectList()
-                            .block(Duration.ofSeconds(GEMINI_TIMEOUT_SECONDS));
+                            .block(Duration.ofSeconds(CHAT_TIMEOUT_SECONDS));
                     successfulModel = model;
-                    log.info("{} [GEMINI] success model={} sessionId={} tokenCount={}", now(), model, sessionId,
+                    successfulProvider = "Groq";
+                    log.info("{} [AI] success provider=Groq model={} sessionId={} tokenCount={}", now(), shortModel, sessionId,
                             tokens == null ? 0 : tokens.size());
                     break;
                 } catch (Exception modelError) {
                     lastModelError = unwrap(modelError);
                     int status = httpStatus(lastModelError);
-                    log.warn("{} [GEMINI] model={} failed status={} sessionId={}", now(), model, status, sessionId, modelError);
-                    if (status == 401 || status == 404 || status == 400) {
-                        log.error("{} [GEMINI] fatal {} model={} - not trying fallback", now(), status, model);
-                        throw new GeminiStreamException("GEMINI_FATAL", model, triedModels, errorMessage(lastModelError), null, 0, lastModelError);
+                    log.warn("{} [AI] provider=Groq model={} failed status={} sessionId={}", now(), model, status, sessionId, modelError);
+                    if (status == 401 || status == 404) {
+                        log.error("{} [AI] provider=Groq fatal {} model={} - not trying fallback", now(), status, model);
+                        throw new ProviderStreamException("GROQ_FATAL", model, triedModels, errorMessage(lastModelError), null, 0, lastModelError);
                     }
-                    if (status != 429 && status != 503) throw modelError;
-                    sawQuotaFailure |= status == 429;
-                    if (triedModels.size() < models.size()) {
-                        log.warn("{} [GEMINI] model={} failed {}, trying next fallback", now(), model, status);
+                    if (status == 429 || status == 503) {
+                        sawQuotaFailure |= status == 429;
+                        if (triedModels.size() < models.size()) {
+                        log.warn("{} [AI] provider=Groq model={} failed {}, trying next fallback", now(), model, status);
+                        }
+                    } else {
+                        log.warn("{} [AI] provider=Groq model={} failed status={}, moving to Gemini fallback", now(), model, status, modelError);
+                        break;
                     }
                 }
             }
             if (successfulModel == null) {
-                String code = sawQuotaFailure ? "QUOTA_EXCEEDED" : "MODEL_OVERLOADED";
-                String message = sawQuotaFailure
-                        ? "All Gemini models quota exceeded (tried " + String.join(", ", triedModels) + "). Please retry in 15h 45m or add billing."
-                        : "All Gemini models are overloaded. Please retry shortly.";
-                throw new GeminiStreamException(code, "all", triedModels, message,
-                        sawQuotaFailure ? "15h45m" : null, sawQuotaFailure ? 56715 : 0, lastModelError);
+                try {
+                    String geminiModel = "gemini-2.5-flash";
+                    triedModels.add(geminiModel);
+                    log.info("{} [AI] provider=Gemini model={} last-resort fallback sessionId={}", now(), geminiModel, sessionId);
+                    tokens = ChatClient.builder(geminiFallbackChatModel).build().prompt()
+                            .system(chatPromptBuilder.systemPrompt(streamContext.repositoryName()))
+                            .user(prompt).stream().content().collectList()
+                            .block(Duration.ofSeconds(CHAT_TIMEOUT_SECONDS));
+                    successfulModel = geminiModel;
+                    successfulProvider = "Gemini";
+                    log.info("{} [AI] success provider=Gemini model={} sessionId={} tokenCount={}", now(), geminiModel, sessionId,
+                            tokens == null ? 0 : tokens.size());
+                } catch (Exception fallbackError) {
+                    lastModelError = unwrap(fallbackError);
+                    int status = httpStatus(lastModelError);
+                    String code = sawQuotaFailure || status == 429 ? "QUOTA_EXCEEDED"
+                            : status == 503 ? "MODEL_OVERLOADED" : "AI_ERROR";
+                    String message = sawQuotaFailure
+                            ? "Groq models exhausted quota/availability and Gemini fallback failed: " + errorMessage(lastModelError)
+                            : "All Groq models and Gemini fallback failed: " + errorMessage(lastModelError);
+                    throw new ProviderStreamException(code, "gemini-2.5-flash", triedModels, message,
+                            sawQuotaFailure || status == 429 ? "15h45m" : null,
+                            sawQuotaFailure || status == 429 ? 56715 : 0, lastModelError);
+                }
             }
 
             stage.set("SSE");
@@ -217,9 +256,9 @@ public class ChatStreamHandler {
                     .content(fullReply.toString())
                     .citations(citationMapper.toJson(retrievedContext.citations()))
                     .build());
-            // Include the model in persisted assistant content metadata is handled client side via SSE metadata.
+            boolean usedFallback = !"Groq".equals(successfulProvider) || !models.isEmpty() && !successfulModel.equals(models.get(0));
             emitter.send(SseEmitter.event().name("model").data(Map.of("model", successfulModel,
-                    "fallback", !models.isEmpty() && !successfulModel.equals(models.get(0)))));
+                    "provider", successfulProvider, "fallback", usedFallback)));
             log.info("{} [SSE] sending assistant_message sessionId={}", now(), sessionId);
             emitter.send(SseEmitter.event().name("assistant_message").data(toMessageResponse(assistant)));
             sendDone(emitter, terminalSent, sessionId);
@@ -228,8 +267,8 @@ public class ChatStreamHandler {
                     ? error.getCause() : error;
             log.error("{} [{}] error sessionId={} type={}", now(), stage.get(), sessionId,
                     cause.getClass().getSimpleName(), cause);
-            if (cause instanceof GeminiStreamException geminiError) {
-                sendError(emitter, terminalSent, geminiError);
+            if (cause instanceof ProviderStreamException providerError) {
+                sendError(emitter, terminalSent, providerError);
             } else {
                 sendError(emitter, terminalSent, errorMessage(cause));
             }
@@ -285,7 +324,7 @@ public class ChatStreamHandler {
 
     private String errorMessage(Throwable error) {
         if (error instanceof TimeoutException) {
-            return "Chat timed out while retrieving code or waiting for Gemini. Please retry.";
+            return "Chat timed out while retrieving code or waiting for the AI provider. Please retry.";
         }
         String message = error.getMessage();
         return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
@@ -317,7 +356,12 @@ public class ChatStreamHandler {
         return 0;
     }
 
-    private void sendError(SseEmitter emitter, AtomicBoolean terminalSent, GeminiStreamException error) {
+    private static String shortModel(String model) {
+        int separator = model.lastIndexOf('/');
+        return separator >= 0 ? model.substring(separator + 1) : model;
+    }
+
+    private void sendError(SseEmitter emitter, AtomicBoolean terminalSent, ProviderStreamException error) {
         if (!terminalSent.compareAndSet(false, true)) return;
         Map<String, Object> payload = new java.util.HashMap<>();
         payload.put("type", "error"); payload.put("code", error.code); payload.put("model", error.model);
@@ -332,11 +376,11 @@ public class ChatStreamHandler {
         } catch (Exception sendError) { emitter.completeWithError(sendError); }
     }
 
-    private static final class GeminiStreamException extends RuntimeException {
+    private static final class ProviderStreamException extends RuntimeException {
         final String code, model, retryAfter;
         final List<String> triedModels;
         final long retryAfterSeconds;
-        GeminiStreamException(String code, String model, List<String> triedModels, String message,
+        ProviderStreamException(String code, String model, List<String> triedModels, String message,
                 String retryAfter, long retryAfterSeconds, Throwable cause) {
             super(message, cause); this.code = code; this.model = model; this.triedModels = List.copyOf(triedModels);
             this.retryAfter = retryAfter; this.retryAfterSeconds = retryAfterSeconds;
