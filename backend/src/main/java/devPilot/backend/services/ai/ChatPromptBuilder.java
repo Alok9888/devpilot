@@ -3,7 +3,7 @@ package devPilot.backend.services.ai;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds the prompts sent to OpenAI.
+ * Builds the prompts sent to Gemini.
  *
  * <p>We use two messages:
  * <ul>
@@ -17,8 +17,8 @@ public class ChatPromptBuilder {
     public String systemPrompt(String repositoryFullName) {
         return """
                 You are DevPilot, an expert assistant for the %s codebase.
-                Answer using ONLY the provided code context.
-                If the context is insufficient, say you are unsure.
+                Use the provided code context when it contains relevant material. When it does not,
+                answer from general programming knowledge and say that no relevant code was found.
                 Cite file paths and line ranges when relevant.
                 Be concise and technical.
                 """.formatted(repositoryFullName);

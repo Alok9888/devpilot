@@ -1,24 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Settings } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 import { DevPilotIcon } from "@/components/icons/devpilot-icon";
 
 import { ModeToggle } from "@/components/ui/mode-toggle";
-import { useCurrentUser, useLogout } from "@/hooks/use-auth";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
@@ -55,9 +43,6 @@ export function AppShell({
   hideHeader?: boolean;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const { data: user } = useCurrentUser();
-  const logout = useLogout();
 
   return (
     <SidebarProvider>
@@ -113,66 +98,10 @@ export function AppShell({
         <SidebarFooter>
           <SidebarMenu>
             <SidebarMenuItem>
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <SidebarMenuButton
-                      size="lg"
-                      className="data-[popup-open]:bg-sidebar-accent"
-                    />
-                  }
-                >
-                  <Avatar className="size-8 rounded-lg">
-                    <AvatarImage
-                      src={user?.avatarUrl ?? undefined}
-                      alt={user?.displayName}
-                    />
-                    <AvatarFallback className="rounded-lg">
-                      {(user?.displayName ?? "DP").slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">
-                      {user?.displayName}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      @{user?.githubUsername}
-                    </span>
-                  </div>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="min-w-56 rounded-lg"
-                  side="top"
-                  align="start"
-                  sideOffset={8}
-                >
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel className="font-normal">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-sm font-medium">
-                          {user?.displayName}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          Connected via GitHub
-                        </span>
-                      </div>
-                    </DropdownMenuLabel>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => router.push("/dashboard/settings")}>
-                    <Settings />
-                    Settings
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => logout.mutate()}
-                    disabled={logout.isPending}
-                  >
-                    <LogOut />
-                    Log out
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <SidebarMenuButton render={<Link href="/" />}>
+                <DevPilotIcon className="size-5 rounded" />
+                <span>Analyze a repository</span>
+              </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

@@ -10,9 +10,11 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CodeContextRetriever {
     private static final String NO_MATCHES = "(no matching code chunks found)";
 
@@ -20,6 +22,7 @@ public class CodeContextRetriever {
     private final CitationMapper citationMapper; 
 
      public RetrievedContext retrieve(UUID repositoryId, String question) {
+        log.info("[VECTOR] searching repo={} queryLength={}", repositoryId, question.length());
         var filter = new FilterExpressionBuilder()
                 .eq(RagSettings.METADATA_REPO_ID, repositoryId.toString())
                 .build();
@@ -31,6 +34,10 @@ public class CodeContextRetriever {
                 .build();
 
         var documents = vectorStore.similaritySearch(search);
+        if (documents == null) {
+            documents = java.util.List.of();
+        }
+        log.info("[VECTOR] found {} results repo={}", documents.size(), repositoryId);
 
         var citations = documents.stream()
                 .map(citationMapper::fromDocument)

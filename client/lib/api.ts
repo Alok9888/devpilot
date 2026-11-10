@@ -1,13 +1,5 @@
 export type IndexStatus = "PENDING" | "INDEXING" | "READY" | "FAILED";
 
-export type User = {
-  id: string;
-  githubId: number;
-  githubUsername: string;
-  displayName: string;
-  avatarUrl: string | null;
-};
-
 export type Repository = {
   id: string;
   githubRepoId: number;
@@ -73,10 +65,6 @@ export function getApiBaseUrl() {
   return "/backend";
 }
 
-export function getGithubLoginUrl() {
-  return `${getApiBaseUrl()}/oauth2/authorization/github`;
-}
-
 async function parseError(res: Response): Promise<string> {
   try {
     const data = await res.json();
@@ -111,12 +99,9 @@ export async function apiFetch<T>(
 }
 
 export const api = {
-  me: () => apiFetch<User>("/api/auth/me"),
-  logout: () =>
-    apiFetch<void>("/api/auth/logout", {
-      method: "POST",
-    }),
-
+  analyzeRepo: (repoUrl: string) => apiFetch<Repository>("/api/repos/analyze", {
+    method: "POST", body: JSON.stringify({ repoUrl }),
+  }),
   listRepos: (refresh = true) =>
     apiFetch<Repository[]>(`/api/repos?refresh=${refresh}`),
   getRepo: (id: string) => apiFetch<Repository>(`/api/repos/${id}`),

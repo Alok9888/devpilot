@@ -18,7 +18,6 @@ import devPilot.backend.entity.Repository;
 import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.RepositoryRepository;
-import devPilot.backend.services.UserService;
 import devPilot.backend.services.ai.RagSettings;
 import devPilot.backend.services.github.GitHubRateLimiter;
 import devPilot.backend.services.github.GithubApiClient;
@@ -34,7 +33,6 @@ public class IndexingService {
     private static final int PROGRESS_EVERY_N_FILES = 5;
 
     private final RepositoryRepository repositoryRepository;
-    private final UserService userService;
     private final GithubApiClient gitHubApiClient;
     private final CodeFileFilter fileFilter;
     private final CodeChunker codeChunker;
@@ -75,12 +73,10 @@ public class IndexingService {
       private void doIndex(UUID repoId, UUID userId) {
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
-        String token = userService.decryptAccessToken(userService.requiredById(userId));
-
         deleteExistingVectors(repoId.toString());
 
         Map<String, Object> tree = gitHubApiClient.getRepoTree(
-                token, repo.getOwner(), repo.getName(), repo.getDefaultBranch());
+                repo.getOwner(), repo.getName(), repo.getDefaultBranch());
         List<String> filePaths = listIndexableFiles(tree);
 
         updateProgress(repoId, filePaths.size(), 0, 0, IndexStatus.INDEXING, null);
@@ -92,7 +88,7 @@ public class IndexingService {
         for (String path : filePaths) {
             try {
                 String content = gitHubApiClient.getFileContent(
-                        token, repo.getOwner(), repo.getName(), path);
+                        repo.getOwner(), repo.getName(), path);
                 List<Document> chunks = codeChunker.chunkFile(repoId.toString(), path, content);
                 batch.addAll(chunks);
                 totalChunks += chunks.size();

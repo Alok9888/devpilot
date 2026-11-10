@@ -43,12 +43,15 @@ export async function streamChatMessage(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedReply = false;
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    // EventSource uses CRLF in some proxies and LF in others. Normalize before
+    // splitting so a CRLF response cannot leave the whole stream buffered.
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
     const parts = buffer.split("\n\n");
     buffer = parts.pop() ?? "";
 
@@ -88,8 +91,10 @@ export async function streamChatMessage(
         } else if (event === "user_message") {
           handlers.onUserMessage?.(JSON.parse(data) as ChatMessage);
         } else if (event === "assistant_message") {
+          receivedReply = true;
           handlers.onAssistantMessage?.(JSON.parse(data) as ChatMessage);
         } else if (event === "done") {
+          receivedReply = true;
           handlers.onDone?.();
         }
       } catch (err) {
@@ -100,5 +105,8 @@ export async function streamChatMessage(
     }
   }
 
+  if (!receivedReply) {
+    throw new Error("The chat stream ended before the assistant replied. Please try again.");
+  }
   handlers.onDone?.();
 }

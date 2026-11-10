@@ -19,17 +19,15 @@ import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.ChatMessageRepository;
 import devPilot.backend.repository.ChatSessionRepository;
-import devPilot.backend.services.ai.ChatPromptBuilder;
 import devPilot.backend.services.ai.ChatStreamHandler;
 import devPilot.backend.services.ai.CitationMapper;
-import devPilot.backend.services.ai.CodeContextRetriever;
 import lombok.RequiredArgsConstructor;
 
 /**
  * Chat sessions and the RAG chat pipeline entry point.
  *
- * <p>{@link #streamReply} orchestrates the full flow:
- * validate → save user message → retrieve code context → build prompts → stream AI reply.
+ * <p>{@link #streamReply} validates and persists the user message. Retrieval and generation
+ * then run asynchronously in {@link devPilot.backend.services.ai.ChatStreamHandler} so the SSE response opens immediately.
  * Each step is implemented in a dedicated class under {@code service.ai}.
  */
 @Service
@@ -39,8 +37,6 @@ public class ChatService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final RepoService repoService;
-    private final CodeContextRetriever codeContextRetriever;
-    private final ChatPromptBuilder chatPromptBuilder;
     private final ChatStreamHandler chatStreamHandler;
     private final CitationMapper citationMapper;
 
@@ -104,19 +100,14 @@ public class ChatService {
                 .build());
 
         // 3. RAG retrieval — find code chunks similar to the question
-        var retrievedContext = codeContextRetriever.retrieve(repo.getId(), userContent);
-
-        // 4. Build LLM prompts from retrieved context + question
-        String systemPrompt = chatPromptBuilder.systemPrompt(repo.getFullName());
-        String userPrompt = chatPromptBuilder.userPrompt(retrievedContext.contextText(), userContent);
-
-        // 5. Stream OpenAI response to the client (SSE)
+        // Retrieval and generation happen after returning the SSE response, so embedding/vector
+        // latency cannot prevent the browser from opening the stream.
         return chatStreamHandler.stream(
                 session.getId(),
                 toMessageResponse(userMessage),
-                retrievedContext.citations(),
-                systemPrompt,
-                userPrompt);
+                repo.getId(),
+                repo.getFullName(),
+                userContent);
     }
 
     private ChatSessionResponse toSessionResponse(ChatSession session) {

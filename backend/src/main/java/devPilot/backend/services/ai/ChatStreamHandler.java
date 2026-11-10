@@ -10,15 +10,21 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import devPilot.backend.dto.ChatMessageResponse;
-import devPilot.backend.dto.CitationDto;
 import devPilot.backend.entity.ChatMessage;
 import devPilot.backend.entity.MessageRole;
 import devPilot.backend.repository.ChatMessageRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Generation step: call OpenAI via Spring AI and stream tokens to the browser over SSE.
+ * Runs retrieval and Gemini generation in the background and streams tokens over SSE.
  */
 @Component
 @RequiredArgsConstructor
@@ -28,36 +34,47 @@ public class ChatStreamHandler {
     private final ChatModel chatModel;
     private final ChatMessageRepository chatMessageRepository;
     private final CitationMapper citationMapper;
+    private final CodeContextRetriever codeContextRetriever;
+    private final ChatPromptBuilder chatPromptBuilder;
+    @Autowired
+    @Qualifier("chatExecutor")
+    private Executor chatExecutor;
 
     public SseEmitter stream(
             UUID sessionId,
             ChatMessageResponse savedUserMessage,
-            List<CitationDto> citations,
-            String systemPrompt,
-            String userPrompt) {
+            UUID repositoryId,
+            String repositoryName,
+            String question) {
 
         SseEmitter emitter = new SseEmitter(RagSettings.STREAM_TIMEOUT_MS);
         StringBuilder fullReply = new StringBuilder();
 
-        try {
-            emitter.send(SseEmitter.event()
-                    .name("user_message")
-                    .data(savedUserMessage));
-
-            ChatClient.builder(chatModel)
-                    .build()
-                    .prompt()
-                    .system(systemPrompt)
-                    .user(userPrompt)
-                    .stream()
-                    .content()
-                    .subscribe(
-                            token -> appendToken(emitter, fullReply, token),
-                            err -> failStream(emitter, err),
-                            () -> completeStream(emitter, sessionId, fullReply, citations));
-        } catch (Exception ex) {
-            failStream(emitter, ex);
-        }
+        chatExecutor.execute(() -> {
+            try {
+                log.info("[CHAT] received session={} repo={}", sessionId, repositoryId);
+                log.info("[STREAM] opening SSE session={}", sessionId);
+                emitter.send(SseEmitter.event().name("user_message").data(savedUserMessage));
+                log.info("[EMBED] query embedding session={}", sessionId);
+                var context = CompletableFuture
+                        .supplyAsync(() -> codeContextRetriever.retrieve(repositoryId, question))
+                        .get(30, TimeUnit.SECONDS);
+                log.info("[VECTOR] found {} results session={}", context.citations().size(), sessionId);
+                String prompt = context.citations().isEmpty()
+                        ? "No relevant code found, answering from general context.\n\n" + question
+                        : chatPromptBuilder.userPrompt(context.contextText(), question);
+                log.info("[GEMINI] calling chat session={}", sessionId);
+                ChatClient.builder(chatModel).build().prompt()
+                        .system(chatPromptBuilder.systemPrompt(repositoryName))
+                        .user(prompt).stream().content()
+                        .timeout(Duration.ofSeconds(60))
+                        .subscribe(token -> appendToken(emitter, fullReply, token),
+                                err -> failStream(emitter, err),
+                                () -> completeStream(emitter, sessionId, fullReply, context.citations()));
+            } catch (Exception ex) {
+                failStream(emitter, ex);
+            }
+        });
 
         return emitter;
     }
@@ -65,6 +82,7 @@ public class ChatStreamHandler {
     private void appendToken(SseEmitter emitter, StringBuilder fullReply, String token) {
         fullReply.append(token);
         try {
+            log.debug("[STREAM] sending token");
             emitter.send(SseEmitter.event()
                     .name("token")
                     .data(token, MediaType.APPLICATION_JSON));
@@ -76,7 +94,13 @@ public class ChatStreamHandler {
     private void failStream(SseEmitter emitter, Throwable error) {
         log.error("Chat stream error", error);
 
-        String message = error.getMessage();
+        if (error instanceof ExecutionException && error.getCause() != null) {
+            error = error.getCause();
+        }
+
+        String message = error instanceof java.util.concurrent.TimeoutException
+                ? "Code retrieval timed out. Please try again."
+                : error.getMessage();
         if (message == null || message.isBlank()) {
             message = error.getClass().getSimpleName();
         }
@@ -100,7 +124,7 @@ public class ChatStreamHandler {
             SseEmitter emitter,
             UUID sessionId,
             StringBuilder fullReply,
-            List<CitationDto> citations) {
+            List<devPilot.backend.dto.CitationDto> citations) {
         try {
             ChatMessage assistant = chatMessageRepository.save(ChatMessage.builder()
                     .sessionId(sessionId)

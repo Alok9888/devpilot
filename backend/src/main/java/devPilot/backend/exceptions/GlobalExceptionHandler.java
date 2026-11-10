@@ -15,6 +15,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(NotFoundException.class)
     ResponseEntity<Map<String, Object>> handleNotFound(NotFoundException ex) {
+        if ("Repo not found or private".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", ex.getMessage()));
+        }
         return error(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
