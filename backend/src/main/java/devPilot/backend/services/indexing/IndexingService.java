@@ -71,6 +71,7 @@ public class IndexingService {
 
 
       private void doIndex(UUID repoId, UUID userId) {
+        log.info("{} [INDEX] start repoId={}", Instant.now(), repoId);
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
         deleteExistingVectors(repoId.toString());
@@ -78,6 +79,7 @@ public class IndexingService {
         Map<String, Object> tree = gitHubApiClient.getRepoTree(
                 repo.getOwner(), repo.getName(), repo.getDefaultBranch());
         List<String> filePaths = listIndexableFiles(tree);
+        log.info("{} [INDEX] eligible files repoId={} count={}", Instant.now(), repoId, filePaths.size());
 
         updateProgress(repoId, filePaths.size(), 0, 0, IndexStatus.INDEXING, null);
 
@@ -93,11 +95,13 @@ public class IndexingService {
                 batch.addAll(chunks);
                 totalChunks += chunks.size();
                 if (batch.size() >= VECTOR_BATCH_SIZE) {
+                    log.info("{} [INDEX] vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
                     vectorStore.add(batch);
+                    log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
                     batch.clear();
                 }
             } catch (Exception ex) {
-                log.warn("Skipping file {} in {}: {}", path, repo.getFullName(), ex.getMessage());
+                log.warn("Skipping file {} in {}", path, repo.getFullName(), ex);
             }
 
             processed++;
@@ -108,7 +112,9 @@ public class IndexingService {
         }
 
         if (!batch.isEmpty()) {
+            log.info("{} [INDEX] final vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
             vectorStore.add(batch);
+            log.info("{} [INDEX] final vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
         }
 
         markReady(repoId, filePaths.size(), processed, totalChunks, repo.getFullName());
@@ -136,9 +142,12 @@ public class IndexingService {
      private void deleteExistingVectors(String repoId) {
         try {
             var filter = new FilterExpressionBuilder().eq(RagSettings.METADATA_REPO_ID, repoId).build();
+            log.info("{} [INDEX] deleting existing vectors repoId={}", Instant.now(), repoId);
             vectorStore.delete(filter);
+            log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
         } catch (Exception ex) {
-            log.warn("Could not delete existing vectors for repo {}: {}", repoId, ex.getMessage());
+            log.error("Could not delete existing vectors for repo {}", repoId, ex);
+            throw new IllegalStateException("Could not clear existing vectors before indexing", ex);
         }
     };
 
@@ -173,7 +182,8 @@ public class IndexingService {
             repo.setUpdatedAt(Instant.now());
             repositoryRepository.save(repo);
         });
-        log.info("Indexed {} files ({} chunks) for {}", processedFiles, totalChunks, fullName);
+        log.info("{} [INDEX] ready repoId={} name={} files={}/{} chunks={}",
+                Instant.now(), repoId, fullName, processedFiles, totalFiles, totalChunks);
     }
 
      @Transactional

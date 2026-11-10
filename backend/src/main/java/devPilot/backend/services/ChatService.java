@@ -1,5 +1,6 @@
 package devPilot.backend.services;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,18 +21,21 @@ import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.ChatMessageRepository;
 import devPilot.backend.repository.ChatSessionRepository;
 import devPilot.backend.services.ai.ChatStreamHandler;
+import devPilot.backend.services.ai.ChatStreamContext;
 import devPilot.backend.services.ai.CitationMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Chat sessions and the RAG chat pipeline entry point.
  *
- * <p>{@link #streamReply} validates and persists the user message. Retrieval and generation
- * then run asynchronously in {@link devPilot.backend.services.ai.ChatStreamHandler} so the SSE response opens immediately.
- * Each step is implemented in a dedicated class under {@code service.ai}.
+ * <p>{@link #streamReply} delegates the complete request lifecycle to a managed SSE task,
+ * including session validation and user-message persistence, so the response opens immediately.
+ * Retrieval and generation are implemented in dedicated classes under {@code service.ai}.
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ChatService {
 
     private final ChatSessionRepository chatSessionRepository;
@@ -85,29 +89,39 @@ public class ChatService {
     }
 
     public SseEmitter streamReply(UUID userId, UUID sessionId, String userContent) {
-        // 1. Ensure the session exists and the repo is indexed
+        // Keep all database work inside the managed SSE task. Returning the emitter first
+        // ensures lookup or pool delays cannot prevent the response from opening.
+        return chatStreamHandler.stream(sessionId, userContent,
+                () -> prepareStreamContext(userId, sessionId, userContent));
+    }
+
+    private ChatStreamContext prepareStreamContext(UUID userId, UUID sessionId, String userContent) {
+        log.info("{} [CHAT] session lookup start sessionId={}", Instant.now(), sessionId);
         ChatSession session = requireSession(userId, sessionId);
+        log.info("{} [CHAT] session lookup done sessionId={}", Instant.now(), sessionId);
+
+        log.info("{} [CHAT] repository lookup start sessionId={} repositoryId={}",
+                Instant.now(), sessionId, session.getRepositoryId());
         Repository repo = repoService.requireOwned(session.getRepositoryId(), userId);
         if (repo.getIndexStatus() != IndexStatus.READY) {
             throw new BadRequestException("Repository is not ready for chat");
         }
+        log.info("{} [CHAT] repository ready sessionId={} repositoryId={}", Instant.now(), sessionId, repo.getId());
 
-        // 2. Persist the user's message
+        log.info("{} [CHAT] save user message start sessionId={}", Instant.now(), sessionId);
         ChatMessage userMessage = chatMessageRepository.save(ChatMessage.builder()
                 .sessionId(session.getId())
                 .role(MessageRole.USER)
                 .content(userContent)
                 .build());
+        log.info("{} [CHAT] save user message done sessionId={} messageId={}",
+                Instant.now(), sessionId, userMessage.getId());
 
-        // 3. RAG retrieval — find code chunks similar to the question
-        // Retrieval and generation happen after returning the SSE response, so embedding/vector
-        // latency cannot prevent the browser from opening the stream.
-        return chatStreamHandler.stream(
+        return new ChatStreamContext(
                 session.getId(),
                 toMessageResponse(userMessage),
                 repo.getId(),
-                repo.getFullName(),
-                userContent);
+                repo.getFullName());
     }
 
     private ChatSessionResponse toSessionResponse(ChatSession session) {

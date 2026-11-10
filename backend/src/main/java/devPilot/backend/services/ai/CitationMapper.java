@@ -11,12 +11,14 @@ import tools.jackson.databind.json.JsonMapper;
 
 import devPilot.backend.dto.CitationDto;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Converts vector-store {@link Document}s into API citations and JSON for persistence.
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class CitationMapper {
 
     private final JsonMapper jsonMapper;
@@ -34,6 +36,7 @@ public class CitationMapper {
         try {
             return jsonMapper.writeValueAsString(citations);
         } catch (JacksonException e) {
+            log.error("Could not serialize chat citations; persisting an empty citation list", e);
             return "[]";
         }
     }
@@ -45,6 +48,7 @@ public class CitationMapper {
         try {
             return jsonMapper.readValue(json, new TypeReference<>() {});
         } catch (JacksonException e) {
+            log.warn("Could not parse persisted chat citations; returning an empty citation list", e);
             return List.of();
         }
     }
@@ -63,6 +67,7 @@ public class CitationMapper {
         try {
             return Integer.parseInt(String.valueOf(value));
         } catch (NumberFormatException e) {
+            log.warn("Could not parse citation line number value={}", value, e);
             return null;
         }
     }

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import jakarta.servlet.http.HttpServletResponse;
 import devPilot.backend.dto.ChatMessageRequest;
 import devPilot.backend.dto.ChatMessageResponse;
 import devPilot.backend.dto.ChatSessionResponse;
@@ -49,7 +50,10 @@ public class ChatController {
     @PostMapping(value = "/sessions/{id}/messages", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter sendMessage(
             @PathVariable UUID id,
-            @Valid @RequestBody ChatMessageRequest request) {
+            @Valid @RequestBody ChatMessageRequest request,
+            HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-cache, no-transform");
+        response.setHeader("X-Accel-Buffering", "no");
         return chatService.streamReply(AnonymousWorkspace.ID, id, request.content());
     }
 }
