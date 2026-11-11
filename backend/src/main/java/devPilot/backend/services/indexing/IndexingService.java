@@ -19,7 +19,6 @@ import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.RepositoryRepository;
 import devPilot.backend.services.ai.RagSettings;
-import devPilot.backend.services.ai.FallbackEmbeddingVectorStore;
 import devPilot.backend.services.github.GitHubRateLimiter;
 import devPilot.backend.services.github.GithubApiClient;
 import jakarta.transaction.Transactional;
@@ -32,6 +31,7 @@ import lombok.extern.slf4j.Slf4j;
 public class IndexingService {
     private static final int VECTOR_BATCH_SIZE = 32;
     private static final int PROGRESS_EVERY_N_FILES = 5;
+    private static final int[] RETRY_DELAYS_MS = {2000, 5000, 10000};
 
     private final RepositoryRepository repositoryRepository;
     private final GithubApiClient gitHubApiClient;
@@ -39,7 +39,6 @@ public class IndexingService {
     private final CodeChunker codeChunker;
     private final GitHubRateLimiter rateLimiter;
     private final VectorStore vectorStore;
-    private final FallbackEmbeddingVectorStore fallbackEmbeddingVectorStore;
 
     @Value("${app.indexing.max-file-bytes:102400}")
     private long maxFileBytes;
@@ -86,9 +85,10 @@ public class IndexingService {
         updateProgress(repoId, filePaths.size(), 0, 0, IndexStatus.INDEXING, null);
 
         List<Document> batch = new ArrayList<>();
-        boolean primaryEmbeddingUnavailable = false;
         int processed = 0;
         int totalChunks = 0;
+        int batchesSucceeded = 0;
+        int totalBatches = 0;
 
         for (String path : filePaths) {
             try {
@@ -98,17 +98,10 @@ public class IndexingService {
                 batch.addAll(chunks);
                 totalChunks += chunks.size();
                 if (batch.size() >= VECTOR_BATCH_SIZE) {
-                    log.info("{} [INDEX] vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
-                    fallbackEmbeddingVectorStore.add(batch);
-                    if (!primaryEmbeddingUnavailable) {
-                        try { vectorStore.add(batch); }
-                        catch (Exception embeddingError) {
-                            primaryEmbeddingUnavailable = true;
-                            log.warn("{} [EMBED] primary embedding failed during indexing; using text-embedding-004 vectors repoId={}: {}",
-                                    Instant.now(), repoId, embeddingError.getMessage());
-                        }
+                    totalBatches++;
+                    if (addBatchWithRetry(batch, repoId)) {
+                        batchesSucceeded++;
                     }
-                    log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
                     batch.clear();
                 }
             } catch (Exception ex) {
@@ -123,20 +116,57 @@ public class IndexingService {
         }
 
         if (!batch.isEmpty()) {
-            log.info("{} [INDEX] final vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
-            fallbackEmbeddingVectorStore.add(batch);
-            if (!primaryEmbeddingUnavailable) {
-                try { vectorStore.add(batch); }
-                catch (Exception embeddingError) {
-                    primaryEmbeddingUnavailable = true;
-                    log.warn("{} [EMBED] primary embedding failed during final indexing batch; text-embedding-004 vectors retained repoId={}: {}",
-                            Instant.now(), repoId, embeddingError.getMessage());
-                }
+            totalBatches++;
+            if (addBatchWithRetry(batch, repoId)) {
+                batchesSucceeded++;
             }
-            log.info("{} [INDEX] final vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
         }
 
-        markReady(repoId, filePaths.size(), processed, totalChunks, repo.getFullName());
+        if (batchesSucceeded == 0 && totalBatches > 0) {
+            markFailed(repoId, "All embedding batches failed (quota exceeded)");
+        } else {
+            markReady(repoId, filePaths.size(), processed, totalChunks, repo.getFullName());
+        }
+    }
+
+    private boolean addBatchWithRetry(List<Document> batch, UUID repoId) {
+        log.info("{} [INDEX] vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
+
+        for (int attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+            try {
+                vectorStore.add(batch);
+                log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
+                return true;
+            } catch (RuntimeException e) {
+                if (!isRetryableError(e) || attempt >= RETRY_DELAYS_MS.length) {
+                    log.error("{} [EMBED] batch failed after {} retries repoId={}: {}",
+                            Instant.now(), attempt, repoId, e.getMessage());
+                    return false;
+                }
+                log.warn("{} [EMBED] batch failed, retrying (attempt {}/{}) repoId={} in {}ms: {}",
+                        Instant.now(), attempt + 1, RETRY_DELAYS_MS.length + 1, repoId, RETRY_DELAYS_MS[attempt], e.getMessage());
+                try {
+                    Thread.sleep(RETRY_DELAYS_MS[attempt]);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.error("Interrupted during embedding retry");
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isRetryableError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("429") || message.contains("503")
+                    || message.contains("quota_exceeded") || message.contains("resource_exhausted")
+                    || message.contains("service_unavailable")) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -163,7 +193,6 @@ public class IndexingService {
             var filter = new FilterExpressionBuilder().eq(RagSettings.METADATA_REPO_ID, repoId).build();
             log.info("{} [INDEX] deleting existing vectors repoId={}", Instant.now(), repoId);
             vectorStore.delete(filter);
-            fallbackEmbeddingVectorStore.delete(filter);
             log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
         } catch (Exception ex) {
             log.error("Could not delete existing vectors for repo {}", repoId, ex);

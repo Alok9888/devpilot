@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -23,12 +22,10 @@ public class CodeContextRetriever {
 
     private final VectorStore vectorStore;
     private final CitationMapper citationMapper;
-    private final EmbeddingModel embeddingModel;
     private final JdbcTemplate jdbcTemplate;
-    private final FallbackEmbeddingVectorStore fallbackEmbeddingVectorStore;
 
     public int embeddingDimensions() {
-        return embeddingModel.dimensions();
+        return 768;
     }
 
     public RetrievedContext retrieve(UUID repositoryId, String question) {
@@ -43,26 +40,16 @@ public class CodeContextRetriever {
                 .filterExpression(filter)
                 .build();
 
-        // PgVectorStore uses this shared JdbcTemplate for its SELECT. Keep database-side
-        // vector searches bounded independently from the embedding request budget.
         jdbcTemplate.setQueryTimeout(10);
         java.util.List<Document> documents;
-        boolean usedFallbackEmbedding = false;
         try {
-            documents = vectorStore.similaritySearch(search);
-        } catch (RuntimeException embeddingError) {
-            if (!isQuotaError(embeddingError)) throw embeddingError;
-            log.warn("{} [EMBED] primary embedding quota exhausted; trying text-embedding-004 repo={}", Instant.now(), repositoryId);
-            usedFallbackEmbedding = true;
-            documents = fallbackSearch(search, repositoryId);
+            documents = retryVectorSearch(search);
+        } catch (RuntimeException e) {
+            log.error("{} [EMBED] vector search failed after retries repo={}: {}", Instant.now(), repositoryId, e.getMessage());
+            documents = java.util.List.of();
         }
         if (documents == null) {
             documents = java.util.List.of();
-        }
-        if (documents.isEmpty() && !usedFallbackEmbedding) {
-            log.info("{} [VECTOR] primary result empty; trying text-embedding-004 repo={}", Instant.now(), repositoryId);
-            documents = fallbackSearch(search, repositoryId);
-            if (documents == null) documents = java.util.List.of();
         }
         log.info("{} [VECTOR] found {} results repo={}", Instant.now(), documents.size(), repositoryId);
 
@@ -82,22 +69,40 @@ public class CodeContextRetriever {
         return new RetrievedContext(citations, contextText);
     }
 
-    private static boolean isQuotaError(Throwable error) {
-        for (Throwable current = error; current != null; current = current.getCause()) {
-            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
-            if (message.contains("429") || message.contains("quota_exceeded") || message.contains("resource_exhausted")) return true;
+    private java.util.List<Document> retryVectorSearch(SearchRequest search) {
+        int[] delays = {2000, 5000, 10000};
+        RuntimeException lastError = null;
+
+        for (int attempt = 0; attempt <= delays.length; attempt++) {
+            try {
+                return vectorStore.similaritySearch(search);
+            } catch (RuntimeException e) {
+                lastError = e;
+                if (!isRetryableError(e) || attempt >= delays.length) {
+                    break;
+                }
+                log.warn("{} [EMBED] vector search failed (attempt {}/{}); retrying in {}ms: {}",
+                        Instant.now(), attempt + 1, delays.length + 1, delays[attempt], e.getMessage());
+                try {
+                    Thread.sleep(delays[attempt]);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during embedding retry", ie);
+                }
+            }
         }
-        return false;
+        throw lastError != null ? lastError : new RuntimeException("Vector search failed after retries");
     }
 
-    private java.util.List<Document> fallbackSearch(SearchRequest search, UUID repositoryId) {
-        try {
-            var documents = fallbackEmbeddingVectorStore.similaritySearch(search);
-            return documents == null ? java.util.List.of() : documents;
-        } catch (RuntimeException fallbackError) {
-            log.warn("{} [EMBED] text-embedding-004 fallback failed; continuing without code context repo={}: {}",
-                    Instant.now(), repositoryId, fallbackError.getMessage());
-            return java.util.List.of();
+    private static boolean isRetryableError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("429") || message.contains("503")
+                    || message.contains("quota_exceeded") || message.contains("resource_exhausted")
+                    || message.contains("service_unavailable")) {
+                return true;
+            }
         }
+        return false;
     }
 }
