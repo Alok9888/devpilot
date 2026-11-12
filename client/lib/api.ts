@@ -63,7 +63,7 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl() {
-  return "/backend";
+  return process.env.NEXT_PUBLIC_API_BASE_URL || "https://devpilot-backend-iso1.onrender.com";
 }
 
 async function parseError(res: Response): Promise<string> {
