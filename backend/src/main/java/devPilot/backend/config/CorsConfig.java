@@ -1,5 +1,6 @@
 package devPilot.backend.config;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -17,13 +18,29 @@ public class CorsConfig {
     CorsConfigurationSource corsConfigurationSource(
             @Value("${app.cors.allowed-origins}") String allowedOrigins) {
         CorsConfiguration config = new CorsConfiguration();
-        List<String> origins = Arrays.stream(allowedOrigins.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
-        config.setAllowedOrigins(origins);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
+
+        // Build allowed origin patterns from property
+        List<String> patterns = new ArrayList<>();
+
+        // Parse the allowed origins from config (supports comma-separated values)
+        if (allowedOrigins != null && !allowedOrigins.isEmpty()) {
+            for (String origin : allowedOrigins.split(",")) {
+                origin = origin.trim();
+                if (!origin.isEmpty()) {
+                    patterns.add(origin);
+                }
+            }
+        }
+
+        // Add Vercel pattern for preview deployments
+        patterns.add("https://*.vercel.app");
+
+        // Use allowedOriginPatterns for wildcard support (Spring Security 6.x)
+        config.setAllowedOriginPatterns(patterns);
+
+        // Restrict HTTP methods to GET, POST, OPTIONS
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "OPTIONS"));
+        config.setAllowedHeaders(Arrays.asList("*"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
 
