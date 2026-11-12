@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 
 import { DevPilotIcon } from "@/components/icons/devpilot-icon";
 
 import { ModeToggle } from "@/components/ui/mode-toggle";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Plus } from "lucide-react";
+import { AddRepoDialog } from "@/components/chat/add-repo-dialog";
+
 import {
   Sidebar,
   SidebarContent,
@@ -35,14 +38,17 @@ export function AppShell({
   description,
   actions,
   hideHeader = false,
+  showAddRepoButton = true,
 }: {
   children: React.ReactNode;
   title?: string;
   description?: string;
   actions?: React.ReactNode;
   hideHeader?: boolean;
+  showAddRepoButton?: boolean;
 }) {
   const pathname = usePathname();
+  const [addRepoDialogOpen, setAddRepoDialogOpen] = useState(false);
 
   return (
     <SidebarProvider>
@@ -89,6 +95,18 @@ export function AppShell({
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
+                  {/* Add New Repository button - only shown in Workspace group */}
+                  {group.label === "Workspace" && showAddRepoButton && (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        className="justify-start gap-2 bg-sidebar-accent hover:bg-sidebar-accent/80"
+                        onClick={() => setAddRepoDialogOpen(true)}
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Add Repository</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -134,6 +152,7 @@ export function AppShell({
         )}
         <div className="flex flex-1 flex-col">{children}</div>
       </SidebarInset>
+      <AddRepoDialog open={addRepoDialogOpen} onOpenChange={setAddRepoDialogOpen} />
     </SidebarProvider>
   );
 }
