@@ -63,7 +63,7 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_BASE_URL || "https://devpilot-backend-iso1.onrender.com";
+  return "https://devpilot-backend-iso1.onrender.com"
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -110,7 +110,7 @@ export const api = {
     apiFetch<Repository>(`/api/repos/${id}/index`, { method: "POST" }),
   indexStatus: (id: string) =>
     apiFetch<IndexStatusResponse>(`/api/repos/${id}/status`),
-   createSession: (repositoryId: string, title?: string) =>
+  createSession: (repositoryId: string, title?: string) =>
     apiFetch<ChatSession>("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify({ repositoryId, title }),
