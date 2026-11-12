@@ -44,6 +44,19 @@ export function ChatView({ repoId }: { repoId: string }) {
   const messagesQuery = useChatMessages(sessionId);
   const { send, stop, retry, streaming, streamText, streamError } = useStreamChat(sessionId);
 
+  // Track when streaming started for the 10s warning
+  const [showLongWaitWarning, setShowLongWaitWarning] = useState(false);
+
+  useEffect(() => {
+    if (streaming) {
+      const timer = setTimeout(() => {
+        setShowLongWaitWarning(true);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+    setShowLongWaitWarning(false);
+  }, [streaming]);
+
   useEffect(() => {
     if (!ready || sessionsQuery.isLoading) return;
     if (sessionsQuery.data && sessionsQuery.data.length > 0) return;
@@ -136,6 +149,8 @@ export function ChatView({ repoId }: { repoId: string }) {
                 messages={messagesQuery.data ?? []}
                 streamText={streamText}
                 isLoading={messagesQuery.isLoading}
+                streaming={streaming}
+                showLongWaitWarning={showLongWaitWarning}
                 streamError={streamError}
                 onRetry={retry}
               />

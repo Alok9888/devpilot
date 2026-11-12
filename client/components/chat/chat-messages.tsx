@@ -1,7 +1,7 @@
 "use client";
 
 import { Bot, UserRound } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { CitationChips } from "@/components/chat/citation-chips";
@@ -19,11 +19,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatMessage, Repository } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+const LOADING_MESSAGES = [
+  "Searching codebase...",
+  "Reading relevant files...",
+  "Understanding your code...",
+  "Thinking through the answer...",
+  "Generating response..."
+];
+
 export function ChatMessages({
   repo,
   messages,
   streamText,
   isLoading,
+  streaming,
+  showLongWaitWarning,
   streamError,
   onRetry,
 }: {
@@ -31,10 +41,27 @@ export function ChatMessages({
   messages: ChatMessage[];
   streamText?: string;
   isLoading?: boolean;
+  streaming?: boolean;
+  showLongWaitWarning?: boolean;
   streamError?: { code?: string; message: string; triedModels?: string[]; retryAfter?: string } | null;
   onRetry?: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  const [showLoading, setShowLoading] = useState(false);
+
+  // Show loading messages when streaming but no tokens yet
+  useEffect(() => {
+    if (streaming && !streamText) {
+      setShowLoading(true);
+      const interval = setInterval(() => {
+        setLoadingMessageIndex(prev => (prev + 1) % LOADING_MESSAGES.length);
+      }, 2500);
+      return () => clearInterval(interval);
+    } else if (streamText) {
+      setShowLoading(false);
+    }
+  }, [streaming, streamText]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -57,8 +84,8 @@ export function ChatMessages({
           <div className="rounded-2xl border border-dashed bg-muted/30 px-6 py-10 text-center">
             <p className="font-medium">Ask anything about this codebase</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Try “Where is authentication handled?” or “Explain the repository
-              indexing flow.”
+              Try "Where is authentication handled?" or "Explain the repository
+              indexing flow."
             </p>
           </div>
         )}
@@ -113,6 +140,32 @@ export function ChatMessages({
               </Message>
             );
           })}
+
+          {/* Loading messages - appears above AI response when streaming starts */}
+          {showLoading && (
+            <Message align="start">
+              <MessageAvatar>
+                <Avatar className="size-8">
+                  <AvatarFallback className="bg-muted">
+                    <Bot className="size-4" />
+                  </AvatarFallback>
+                </Avatar>
+              </MessageAvatar>
+              <MessageContent>
+                <Bubble variant="muted" align="start" className="max-w-full">
+                  <BubbleContent className="w-full max-w-full px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">{LOADING_MESSAGES[loadingMessageIndex]}</span>
+                      <span className="animate-pulse h-2 w-2 rounded-full bg-foreground/50" />
+                      {showLongWaitWarning && (
+                        <span className="text-xs text-amber-600 dark:text-amber-400 ml-2">Still working, this repo is large...</span>
+                      )}
+                    </div>
+                  </BubbleContent>
+                </Bubble>
+              </MessageContent>
+            </Message>
+          )}
 
           {streamText && (
             <Message align="start">
