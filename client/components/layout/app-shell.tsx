@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 
 import { DevPilotIcon } from "@/components/icons/devpilot-icon";
 
+import { Button } from "@/components/ui/button";
 import { ModeToggle } from "@/components/ui/mode-toggle";
 import { Separator } from "@/components/ui/separator";
 import { Plus } from "lucide-react";
