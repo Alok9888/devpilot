@@ -96,19 +96,21 @@ export function AppShell({
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   ))}
-                  {/* Add New Repository button - only shown in Workspace group */}
-                  {group.label === "Workspace" && showAddRepoButton && (
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        className="justify-start gap-2 bg-sidebar-accent hover:bg-sidebar-accent/80"
-                        onClick={() => setAddRepoDialogOpen(true)}
-                      >
-                        <Plus className="h-4 w-4" />
-                        <span>Add Repository</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )}
                 </SidebarMenu>
+                {/* Add New Repository button - only shown in Workspace group */}
+                {group.label === "Workspace" && showAddRepoButton && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      variant="outline"
+                      className="justify-start gap-2 border-dashed"
+                      isActive={false}
+                      onClick={() => setAddRepoDialogOpen(true)}
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Add Repository</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarGroupContent>
             </SidebarGroup>
           ))}
