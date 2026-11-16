@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Service;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
@@ -159,6 +160,19 @@ public class IndexingService {
     }
 
     @SuppressWarnings("unchecked")
+    private Map<String, String> loadIndexedFiles(Repository repo) {
+        if (repo.getIndexedFilesJson() == null || repo.getIndexedFilesJson().isBlank()) {
+            return new HashMap<>();
+        }
+        try {
+            return objectMapper.readValue(repo.getIndexedFilesJson(), new TypeReference<Map<String, String>>() {});
+        } catch (Exception e) {
+            log.warn("Could not parse indexed files JSON, starting fresh: {}", e.getMessage());
+            return new HashMap<>();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     private Map<String, String> extractFileShas(Map<String, Object> tree) {
         Map<String, String> result = new HashMap<>();
         if (tree == null || tree.get("tree") == null) return result;
@@ -283,13 +297,14 @@ public class IndexingService {
         if (removedFiles.isEmpty()) return;
 
         try {
-            var filter = new FilterExpressionBuilder()
+            // Build filter using AND combination
+            Filter repoFilter = new FilterExpressionBuilder()
                     .eq(RagSettings.METADATA_REPO_ID, repoId)
-                    .and()
                     .eq(RagSettings.METADATA_USER_ID, userId.toString())
                     .build();
+
             log.info("{} [INDEX] deleting existing vectors repoId={} removed={}", Instant.now(), repoId, removedFiles.size());
-            vectorStore.delete(filter);
+            vectorStore.delete(repoFilter);
             log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
         } catch (Exception ex) {
             log.error("Could not delete existing vectors for repo {}", repoId, ex);
