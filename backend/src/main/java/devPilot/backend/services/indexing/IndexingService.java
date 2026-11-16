@@ -1,10 +1,21 @@
 package devPilot.backend.services.indexing;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 
 import org.springframework.stereotype.Service;
 import org.springframework.ai.document.Document;
@@ -30,7 +41,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class IndexingService {
     private static final int VECTOR_BATCH_SIZE = 32;
-    private static final int PROGRESS_EVERY_N_FILES = 5;
+    private static final int PARALLEL_FETCH_WORKERS = 8;
+    private static final long RETRIEVAL_TIMEOUT_MS = 120000; // 2 minutes total timeout
+
     private static final int[] RETRY_DELAYS_MS = {2000, 5000, 10000};
 
     private final RepositoryRepository repositoryRepository;
@@ -39,6 +52,7 @@ public class IndexingService {
     private final CodeChunker codeChunker;
     private final GitHubRateLimiter rateLimiter;
     private final VectorStore vectorStore;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${app.indexing.max-file-bytes:102400}")
     private long maxFileBytes;
@@ -62,70 +76,236 @@ public class IndexingService {
 
     @Async("indexingExecutor")
      public void indexAsync(UUID repoId, UUID userId) {
+        long startTime = System.currentTimeMillis();
         try {
-            doIndex(repoId, userId);
+            doIndex(repoId, userId, startTime);
         } catch (Exception ex) {
             log.error("Indexing failed for repo {}", repoId, ex);
             markFailed(repoId, ex.getMessage());
         }
     }
 
-
-      private void doIndex(UUID repoId, UUID userId) {
+    @SuppressWarnings("unchecked")
+    private void doIndex(UUID repoId, UUID userId, long startTime) {
         log.info("{} [INDEX] start repoId={}", Instant.now(), repoId);
         Repository repo = repositoryRepository.findById(repoId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
-        deleteExistingVectors(repoId.toString());
 
+        // Load previously indexed files
+        Map<String, String> previousFiles = loadIndexedFiles(repo);
+        String previousTreeSha = repo.getTreeSha() != null ? repo.getTreeSha() : "";
+
+        // Get current tree and compute current SHA
         Map<String, Object> tree = gitHubApiClient.getRepoTree(
-                repo.getOwner(), repo.getName(), repo.getDefaultBranch());
-        List<String> filePaths = listIndexableFiles(tree);
-        log.info("{} [INDEX] eligible files repoId={} count={}", Instant.now(), repoId, filePaths.size());
+            repo.getOwner(), repo.getName(), repo.getDefaultBranch());
 
-        updateProgress(repoId, filePaths.size(), 0, 0, IndexStatus.INDEXING, null);
+        String currentTreeSha = computeTreeSha(tree);
+        Map<String, String> currentFiles = extractFileShas(tree);
 
-        List<Document> batch = new ArrayList<>();
-        int processed = 0;
-        int totalChunks = 0;
-        int batchesSucceeded = 0;
-        int totalBatches = 0;
+        // If tree SHA hasn't changed, skip indexing
+        if (!previousTreeSha.isEmpty() && previousTreeSha.equals(currentTreeSha)) {
+            int skippedCount = previousFiles.size();
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("{} [INDEX] skipped repoId={} files={} time={}ms - tree unchanged",
+                     Instant.now(), repoId, skippedCount, duration);
+            repo.setFilesProcessed(skippedCount);
+            repo.setFilesTotal(skippedCount);
+            repo.setIndexStatus(IndexStatus.READY);
+            repo.setUpdatedAt(Instant.now());
+            repositoryRepository.save(repo);
+            return;
+        }
 
-        for (String path : filePaths) {
-            try {
-                String content = gitHubApiClient.getFileContent(
+        // Determine changed, new, and removed files
+        IndexingResult result = computeIndexingChanges(previousFiles, currentFiles);
+
+        log.info("{} [INDEX] changes repoId={} total={} new={} changed={} removed={} unchanged={}",
+            Instant.now(), repoId,
+            result.allFiles.size(),
+            result.newFiles.size(),
+            result.changedFiles.size(),
+            result.removedFiles.size(),
+            result.unchangedFiles.size());
+
+        // Delete vectors for removed files only
+        deleteVectorsForRemovedFiles(userId, repoId.toString(), result.removedFiles);
+
+        // Fetch and process changed/new files in parallel
+        long fetchStart = System.currentTimeMillis();
+        List<Document> allChunks = fetchAndProcessFiles(
+            repo, userId, repoId, result.newFiles, result.changedFiles);
+        long fetchDuration = System.currentTimeMillis() - fetchStart;
+
+        int totalChunks = allChunks.size();
+
+        // Store all chunks
+        storeChunks(allChunks, repoId);
+
+        int skippedCount = result.unchangedFiles.size();
+
+        // Update repo with new tree SHA and indexed files
+        repo.setTreeSha(currentTreeSha);
+        repo.setIndexedFilesJson(objectMapper.writeValueAsString(currentFiles));
+        repo.setFilesTotal(result.allFiles.size());
+        repo.setFilesProcessed(result.allFiles.size());
+        repo.setChunkCount(totalChunks);
+        repo.setIndexedAt(Instant.now());
+        repositoryRepository.save(repo);
+
+        long duration = System.currentTimeMillis() - startTime;
+        log.info("{} [INDEX] complete repoId={} total={} fetched={} skipped={} chunks={} fetch={}ms time={}ms",
+                 Instant.now(), repoId, result.allFiles.size(), result.newFiles.size() + result.changedFiles.size(),
+                 skippedCount, totalChunks, fetchDuration, duration);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> extractFileShas(Map<String, Object> tree) {
+        Map<String, String> result = new HashMap<>();
+        if (tree == null || tree.get("tree") == null) return result;
+
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) tree.get("tree");
+        for (Map<String, Object> entry : entries) {
+            if (!"blob".equals(entry.get("type"))) continue;
+            String path = String.valueOf(entry.get("path"));
+            String sha = String.valueOf(entry.get("sha"));
+            result.put(path, sha);
+        }
+        return result;
+    }
+
+    private String computeTreeSha(Map<String, Object> tree) {
+        Map<String, String> files = extractFileShas(tree);
+        String filesHash = files.entrySet().stream()
+            .map(e -> e.getKey() + ":" + e.getValue())
+            .sorted()
+            .collect(Collectors.joining("|"));
+
+        if (filesHash.isEmpty()) return "";
+
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(filesHash.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(hash);
+        } catch (Exception e) {
+            log.warn("Could not compute tree SHA: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private IndexingResult computeIndexingChanges(Map<String, String> previousFiles, Map<String, String> currentFiles) {
+        List<String> allFiles = new ArrayList<>(currentFiles.keySet());
+        List<String> newFiles = new ArrayList<>();
+        List<String> changedFiles = new ArrayList<>();
+        List<String> removedFiles = new ArrayList<>();
+        List<String> unchangedFiles = new ArrayList<>();
+
+        for (String path : currentFiles.keySet()) {
+            String currentSha = currentFiles.get(path);
+            String prevSha = previousFiles.get(path);
+            if (prevSha == null) {
+                newFiles.add(path);
+            } else if (!prevSha.equals(currentSha)) {
+                changedFiles.add(path);
+            } else {
+                unchangedFiles.add(path);
+            }
+        }
+
+        for (String prevPath : previousFiles.keySet()) {
+            if (!currentFiles.containsKey(prevPath)) {
+                removedFiles.add(prevPath);
+            }
+        }
+
+        return new IndexingResult(allFiles, newFiles, changedFiles, removedFiles, unchangedFiles, currentFiles);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Document> fetchAndProcessFiles(
+            Repository repo, UUID userId, UUID repoId,
+            List<String> newFiles, List<String> changedFiles) {
+
+        List<String> filesToFetch = new ArrayList<>(newFiles);
+        filesToFetch.addAll(changedFiles);
+
+        if (filesToFetch.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        List<CompletableFuture<FileResult>> futures = new ArrayList<>();
+        Semaphore semaphore = new Semaphore(PARALLEL_FETCH_WORKERS);
+
+        for (String path : filesToFetch) {
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    semaphore.acquire();
+                    rateLimiter.pause();
+
+                    String content = gitHubApiClient.getFileContent(
                         repo.getOwner(), repo.getName(), path);
-                List<Document> chunks = codeChunker.chunkFile(repoId.toString(), path, content);
-                batch.addAll(chunks);
-                totalChunks += chunks.size();
-                if (batch.size() >= VECTOR_BATCH_SIZE) {
-                    totalBatches++;
-                    if (addBatchWithRetry(batch, repoId)) {
-                        batchesSucceeded++;
+                    if (content == null) {
+                        return new FileResult(path, List.of(), null);
                     }
-                    batch.clear();
+
+                    List<Document> chunks = codeChunker.chunkFile(
+                        userId, repoId.toString(), path, content);
+                    return new FileResult(path, chunks, null);
+
+                } catch (Exception e) {
+                    log.warn("Failed to process file {}: {}", path, e.getMessage());
+                    return new FileResult(path, List.of(), e);
+                } finally {
+                    semaphore.release();
                 }
-            } catch (Exception ex) {
-                log.warn("Skipping file {} in {}", path, repo.getFullName(), ex);
-            }
-
-            processed++;
-            if (processed % PROGRESS_EVERY_N_FILES == 0 || processed == filePaths.size()) {
-                updateProgress(repoId, filePaths.size(), processed, totalChunks, IndexStatus.INDEXING, null);
-            }
-            rateLimiter.pause();
+            }));
         }
 
-        if (!batch.isEmpty()) {
-            totalBatches++;
-            if (addBatchWithRetry(batch, repoId)) {
-                batchesSucceeded++;
+        // Wait for all to complete with overall timeout
+        List<Document> allChunks = new ArrayList<>();
+        for (CompletableFuture<FileResult> future : futures) {
+            try {
+                FileResult result = future.get(RETRIEVAL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                if (result.chunks != null) {
+                    allChunks.addAll(result.chunks);
+                }
+            } catch (TimeoutException e) {
+                log.warn("Timeout processing files, continuing with partial results");
+            } catch (Exception e) {
+                log.warn("Error processing files: {}", e.getMessage());
             }
         }
 
-        if (batchesSucceeded == 0 && totalBatches > 0) {
-            markFailed(repoId, "All embedding batches failed (quota exceeded)");
-        } else {
-            markReady(repoId, filePaths.size(), processed, totalChunks, repo.getFullName());
+        return allChunks;
+    }
+
+    private void deleteVectorsForRemovedFiles(UUID userId, String repoId, List<String> removedFiles) {
+        if (removedFiles.isEmpty()) return;
+
+        try {
+            var filter = new FilterExpressionBuilder()
+                    .eq(RagSettings.METADATA_REPO_ID, repoId)
+                    .and()
+                    .eq(RagSettings.METADATA_USER_ID, userId.toString())
+                    .build();
+            log.info("{} [INDEX] deleting existing vectors repoId={} removed={}", Instant.now(), repoId, removedFiles.size());
+            vectorStore.delete(filter);
+            log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
+        } catch (Exception ex) {
+            log.error("Could not delete existing vectors for repo {}", repoId, ex);
+        }
+    }
+
+    private void storeChunks(List<Document> chunks, UUID repoId) {
+        int batchSize = VECTOR_BATCH_SIZE;
+        for (int i = 0; i < chunks.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, chunks.size());
+            List<Document> batch = chunks.subList(i, end);
+
+            boolean success = addBatchWithRetry(batch, repoId);
+            if (!success) {
+                log.error("Failed to store batch {}-{} for repo {}", i, end, repoId);
+            }
         }
     }
 
@@ -169,73 +349,38 @@ public class IndexingService {
         return false;
     }
 
+    private class IndexingResult {
+        final List<String> allFiles;
+        final List<String> newFiles;
+        final List<String> changedFiles;
+        final List<String> removedFiles;
+        final List<String> unchangedFiles;
+        final Map<String, String> currentFiles;
 
-       @SuppressWarnings("unchecked")
-    private List<String> listIndexableFiles(Map<String, Object> tree) {
-        if (tree == null || tree.get("tree") == null) {
-            return List.of();
+        IndexingResult(List<String> allFiles, List<String> newFiles, List<String> changedFiles,
+                       List<String> removedFiles, List<String> unchangedFiles, Map<String, String> currentFiles) {
+            this.allFiles = allFiles;
+            this.newFiles = newFiles;
+            this.changedFiles = changedFiles;
+            this.removedFiles = removedFiles;
+            this.unchangedFiles = unchangedFiles;
+            this.currentFiles = currentFiles;
         }
-
-        List<Map<String, Object>> entries = (List<Map<String, Object>>) tree.get("tree");
-        return entries.stream()
-                .filter(entry -> "blob".equals(String.valueOf(entry.get("type"))))
-                .filter(entry -> {
-                    String path = String.valueOf(entry.get("path"));
-                    long size = entry.get("size") instanceof Number n ? n.longValue() : 0L;
-                    return fileFilter.isEligible(path, size, maxFileBytes);
-                })
-                .map(entry -> String.valueOf(entry.get("path")))
-                .toList();
     }
 
-     private void deleteExistingVectors(String repoId) {
-        try {
-            var filter = new FilterExpressionBuilder().eq(RagSettings.METADATA_REPO_ID, repoId).build();
-            log.info("{} [INDEX] deleting existing vectors repoId={}", Instant.now(), repoId);
-            vectorStore.delete(filter);
-            log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
-        } catch (Exception ex) {
-            log.error("Could not delete existing vectors for repo {}", repoId, ex);
-            throw new IllegalStateException("Could not clear existing vectors before indexing", ex);
+    private class FileResult {
+        final String path;
+        final List<Document> chunks;
+        final Exception error;
+
+        FileResult(String path, List<Document> chunks, Exception error) {
+            this.path = path;
+            this.chunks = chunks;
+            this.error = error;
         }
-    };
-
-      @Transactional
-    protected void updateProgress(
-            UUID repoId,
-            int total,
-            int processed,
-            int chunks,
-            IndexStatus status,
-            String error) {
-        repositoryRepository.findById(repoId).ifPresent(repo -> {
-            repo.setFilesTotal(total);
-            repo.setFilesProcessed(processed);
-            repo.setChunkCount(chunks);
-            repo.setIndexStatus(status);
-            repo.setErrorMessage(error);
-            repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
-        });
     }
 
-      @Transactional
-    protected void markReady(UUID repoId, int totalFiles, int processedFiles, int totalChunks, String fullName) {
-        repositoryRepository.findById(repoId).ifPresent(repo -> {
-            repo.setIndexStatus(IndexStatus.READY);
-            repo.setFilesTotal(totalFiles);
-            repo.setFilesProcessed(processedFiles);
-            repo.setChunkCount(totalChunks);
-            repo.setIndexedAt(Instant.now());
-            repo.setErrorMessage(null);
-            repo.setUpdatedAt(Instant.now());
-            repositoryRepository.save(repo);
-        });
-        log.info("{} [INDEX] ready repoId={} name={} files={}/{} chunks={}",
-                Instant.now(), repoId, fullName, processedFiles, totalFiles, totalChunks);
-    }
-
-     @Transactional
+    @Transactional
     protected void markFailed(UUID repoId, String message) {
         repositoryRepository.findById(repoId).ifPresent(repo -> {
             repo.setIndexStatus(IndexStatus.FAILED);
@@ -246,5 +391,4 @@ public class IndexingService {
             repositoryRepository.save(repo);
         });
     }
-
 }

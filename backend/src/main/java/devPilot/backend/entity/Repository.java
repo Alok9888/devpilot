@@ -84,6 +84,12 @@ public class Repository {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "tree_sha")
+    private String treeSha;
+
+    @Column(name = "indexed_files_json", columnDefinition = "TEXT")
+    private String indexedFilesJson;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
