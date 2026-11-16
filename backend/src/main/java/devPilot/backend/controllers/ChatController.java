@@ -2,6 +2,7 @@ package devPilot.backend.controllers;
 
 import java.util.List;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -14,12 +15,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import jakarta.servlet.http.HttpServletResponse;
 import devPilot.backend.dto.ChatMessageRequest;
 import devPilot.backend.dto.ChatMessageResponse;
 import devPilot.backend.dto.ChatSessionResponse;
 import devPilot.backend.dto.CreateChatSessionRequest;
-import devPilot.backend.services.AnonymousWorkspace;
+import devPilot.backend.config.WorkspaceContext;
 import devPilot.backend.services.ChatService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -30,21 +30,22 @@ import lombok.RequiredArgsConstructor;
 public class ChatController {
 
     private final ChatService chatService;
+    private final WorkspaceContext workspaceContext;
 
     @PostMapping("/sessions")
     public ResponseEntity<ChatSessionResponse> createSession(
             @Valid @RequestBody CreateChatSessionRequest request) {
-        return ResponseEntity.ok(chatService.createSession(AnonymousWorkspace.ID, request));
+        return ResponseEntity.ok(chatService.createSession(workspaceContext.getWorkspaceId(), request));
     }
 
     @GetMapping("/sessions")
     public List<ChatSessionResponse> listSessions(@RequestParam UUID repositoryId) {
-        return chatService.listSessions(AnonymousWorkspace.ID, repositoryId);
+        return chatService.listSessions(workspaceContext.getWorkspaceId(), repositoryId);
     }
 
     @GetMapping("/sessions/{id}")
     public List<ChatMessageResponse> getMessages(@PathVariable UUID id) {
-        return chatService.getMessages(AnonymousWorkspace.ID, id);
+        return chatService.getMessages(workspaceContext.getWorkspaceId(), id);
     }
 
     @PostMapping(value = "/sessions/{id}/messages", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -54,6 +55,6 @@ public class ChatController {
             HttpServletResponse response) {
         response.setHeader("Cache-Control", "no-cache, no-transform");
         response.setHeader("X-Accel-Buffering", "no");
-        return chatService.streamReply(AnonymousWorkspace.ID, id, request.content());
+        return chatService.streamReply(workspaceContext.getWorkspaceId(), id, request.content());
     }
 }

@@ -1,4 +1,4 @@
-import { getApiBaseUrl, ApiError, type ChatMessage } from "@/lib/api";
+import { getApiBaseUrl, getWorkspaceId, ApiError, type ChatMessage } from "@/lib/api";
 
 const RESPONSE_TIMEOUT_MS = 20_000;
 const STREAM_IDLE_TIMEOUT_MS = 110_000;
@@ -56,6 +56,7 @@ export async function streamChatMessage(
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
+          "X-Workspace-Id": getWorkspaceId(),
         },
         body: JSON.stringify({ content }),
         signal: controller.signal,

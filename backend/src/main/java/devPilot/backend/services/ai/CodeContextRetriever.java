@@ -28,10 +28,12 @@ public class CodeContextRetriever {
         return 768;
     }
 
-    public RetrievedContext retrieve(UUID repositoryId, String question) {
+    public RetrievedContext retrieve(UUID userId, UUID repositoryId, String question) {
         log.info("{} [VECTOR] search start repo={} queryLength={}", Instant.now(), repositoryId, question.length());
         var filter = new FilterExpressionBuilder()
                 .eq(RagSettings.METADATA_REPO_ID, repositoryId.toString())
+                .and()
+                .eq(RagSettings.METADATA_USER_ID, userId.toString())
                 .build();
 
         var search = SearchRequest.builder()

@@ -142,7 +142,7 @@ public class ChatStreamHandler {
             log.info("{} [EMBED] start sessionId={}", now(), sessionId);
             log.info("{} [VECTOR] search start sessionId={}", now(), sessionId);
             Future<RetrievedContext> retrieval = ragExecutor.submit(
-                    () -> codeContextRetriever.retrieve(streamContext.repositoryId(), question));
+                    () -> codeContextRetriever.retrieve(streamContext.userId(), streamContext.repositoryId(), question));
             RetrievedContext retrievedContext;
             try {
                 retrievedContext = retrieval.get(EMBEDDING_TIMEOUT_SECONDS, TimeUnit.SECONDS);

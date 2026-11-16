@@ -118,6 +118,7 @@ public class ChatService {
                 Instant.now(), sessionId, userMessage.getId());
 
         return new ChatStreamContext(
+                userId,
                 session.getId(),
                 toMessageResponse(userMessage),
                 repo.getId(),

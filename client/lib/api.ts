@@ -62,6 +62,18 @@ export class ApiError extends Error {
   }
 }
 
+const WORKSPACE_ID_KEY = "devpilot-workspace-id";
+
+export function getWorkspaceId(): string {
+  if (typeof window === "undefined") return "";
+  let workspaceId = localStorage.getItem(WORKSPACE_ID_KEY);
+  if (!workspaceId) {
+    workspaceId = crypto.randomUUID();
+    localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
+  }
+  return workspaceId;
+}
+
 export function getApiBaseUrl() {
   return "https://devpilot-backend-iso1.onrender.com"
 }
@@ -84,6 +96,7 @@ export async function apiFetch<T>(
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      "X-Workspace-Id": getWorkspaceId(),
       ...(init?.headers ?? {}),
     },
   });

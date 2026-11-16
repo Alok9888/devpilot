@@ -2,7 +2,6 @@ package devPilot.backend.controllers;
 
 import java.util.List;
 import java.util.UUID;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,7 +15,7 @@ import devPilot.backend.dto.IndexStatusResponse;
 import devPilot.backend.dto.RepositoryResponse;
 import devPilot.backend.entity.Repository;
 import devPilot.backend.dto.AnalyzeRepoRequest;
-import devPilot.backend.services.AnonymousWorkspace;
+import devPilot.backend.config.WorkspaceContext;
 import devPilot.backend.services.RepoService;
 import devPilot.backend.services.indexing.IndexingService;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +26,12 @@ import lombok.RequiredArgsConstructor;
 public class RepoController {
 
     private final RepoService repoService;
-
     private final IndexingService indexingService;
+    private final WorkspaceContext workspaceContext;
 
     @GetMapping
     public List<RepositoryResponse> list() {
-        return repoService.listStored(AnonymousWorkspace.ID);
+        return repoService.listStored(workspaceContext.getWorkspaceId());
     }
 
     @PostMapping("/analyze")
@@ -45,30 +44,32 @@ public class RepoController {
         if (!matcher.matches()) {
             throw new devPilot.backend.exceptions.BadRequestException("Enter a valid public GitHub repository URL");
         }
-        Repository repo = repoService.analyzePublicRepo(AnonymousWorkspace.ID, matcher.group(1), matcher.group(2));
+        UUID workspaceId = workspaceContext.getWorkspaceId();
+        Repository repo = repoService.analyzePublicRepo(workspaceId, matcher.group(1), matcher.group(2));
         if (repo.getIndexStatus() != devPilot.backend.entity.IndexStatus.READY
                 && repo.getIndexStatus() != devPilot.backend.entity.IndexStatus.INDEXING) {
-            repo = indexingService.startIndexing(repo.getId(), AnonymousWorkspace.ID);
-            indexingService.indexAsync(repo.getId(), AnonymousWorkspace.ID);
+            repo = indexingService.startIndexing(repo.getId(), workspaceId);
+            indexingService.indexAsync(repo.getId(), workspaceId);
         }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
     }
 
     @GetMapping("/{id}")
     public RepositoryResponse get(@PathVariable UUID id) {
-        return repoService.toResponse(repoService.requireOwned(id, AnonymousWorkspace.ID));
+        return repoService.toResponse(repoService.requireOwned(id, workspaceContext.getWorkspaceId()));
     }
 
     @PostMapping("/{id}/index")
     public ResponseEntity<RepositoryResponse> index(@PathVariable UUID id) {
-        Repository repo = indexingService.startIndexing(id, AnonymousWorkspace.ID);
-        indexingService.indexAsync(id, AnonymousWorkspace.ID);
+        UUID workspaceId = workspaceContext.getWorkspaceId();
+        Repository repo = indexingService.startIndexing(id, workspaceId);
+        indexingService.indexAsync(id, workspaceId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
     }
 
     @GetMapping("/{id}/status")
     public IndexStatusResponse status(@PathVariable UUID id) {
-        return repoService.status(id, AnonymousWorkspace.ID);
+        return repoService.status(id, workspaceContext.getWorkspaceId());
     }
 
 }

@@ -10,6 +10,9 @@ public final class RagSettings {
     /** Metadata key stored on each embedded document (must match {@link devPilot.backend.service.indexing.CodeChunker}). */
     public static final String METADATA_REPO_ID = "repoId";
 
+    /** Metadata key for workspace/user ID in vector documents. */
+    public static final String METADATA_USER_ID = "userId";
+
     private RagSettings() {
     }
 }
