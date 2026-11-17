@@ -145,7 +145,11 @@ public class IndexingService {
 
         // Update repo with new tree SHA and indexed files
         repo.setTreeSha(currentTreeSha);
-        repo.setIndexedFilesJson(objectMapper.writeValueAsString(currentFiles));
+        try {
+            repo.setIndexedFilesJson(objectMapper.writeValueAsString(currentFiles));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            log.error("Failed to serialize indexed files JSON: {}", e.getMessage());
+        }
         repo.setFilesTotal(result.allFiles.size());
         repo.setFilesProcessed(result.allFiles.size());
         repo.setChunkCount(totalChunks);
