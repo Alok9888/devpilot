@@ -7,7 +7,6 @@ import java.util.stream.Collectors;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -30,16 +29,18 @@ public class CodeContextRetriever {
 
     public RetrievedContext retrieve(UUID userId, UUID repositoryId, String question) {
         log.info("{} [VECTOR] search start repo={} queryLength={}", Instant.now(), repositoryId, question.length());
-        var filter = new FilterExpressionBuilder()
-                .eq(RagSettings.METADATA_REPO_ID, repositoryId.toString())
-                .and()
-                .eq(RagSettings.METADATA_USER_ID, userId.toString())
-                .build();
+
+        // Build filter expression as string - compatible with Spring AI 2.0.0 PGVector
+        String filterExpression = String.format(
+            "%s == '%s' && %s == '%s'",
+            RagSettings.METADATA_REPO_ID, repositoryId.toString(),
+            RagSettings.METADATA_USER_ID, userId.toString()
+        );
 
         var search = SearchRequest.builder()
                 .query(question)
                 .topK(RagSettings.TOP_K_CHUNKS)
-                .filterExpression(filter)
+                .filterExpression(filterExpression)
                 .build();
 
         jdbcTemplate.setQueryTimeout(10);

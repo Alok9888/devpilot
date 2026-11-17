@@ -19,9 +19,8 @@ import java.nio.charset.StandardCharsets;
 
 import org.springframework.stereotype.Service;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.filter.Filter;
-import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 
@@ -297,15 +296,31 @@ public class IndexingService {
         if (removedFiles.isEmpty()) return;
 
         try {
-            // Build filter using AND combination
-            Filter repoFilter = new FilterExpressionBuilder()
-                    .eq(RagSettings.METADATA_REPO_ID, repoId)
-                    .eq(RagSettings.METADATA_USER_ID, userId.toString())
-                    .build();
+            // Build filter expression as string - matches how PGVector stores metadata
+            String filterExpression = String.format(
+                "%s == '%s' && %s == '%s'",
+                RagSettings.METADATA_REPO_ID, repoId,
+                RagSettings.METADATA_USER_ID, userId.toString()
+            );
 
-            log.info("{} [INDEX] deleting existing vectors repoId={} removed={}", Instant.now(), repoId, removedFiles.size());
-            vectorStore.delete(repoFilter);
-            log.info("{} [INDEX] deleted existing vectors repoId={}", Instant.now(), repoId);
+            // Use SearchRequest to find matching documents, then delete by ID
+            SearchRequest searchRequest = SearchRequest.builder()
+                .query("")  // empty query, we're just filtering
+                .topK(Integer.MAX_VALUE)
+                .filterExpression(filterExpression)
+                .build();
+
+            List<Document> docsToDelete = vectorStore.similaritySearch(searchRequest);
+            List<String> idsToDelete = docsToDelete.stream()
+                .map(Document::getId)
+                .toList();
+
+            if (!idsToDelete.isEmpty()) {
+                log.info("{} [INDEX] deleting {} vectors repoId={} removed={}",
+                    Instant.now(), idsToDelete.size(), repoId, removedFiles.size());
+                vectorStore.delete(idsToDelete);
+            }
+            log.info("{} [INDEX] deleted vectors for repoId={}", Instant.now(), repoId);
         } catch (Exception ex) {
             log.error("Could not delete existing vectors for repo {}", repoId, ex);
         }
