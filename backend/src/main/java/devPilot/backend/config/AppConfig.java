@@ -11,24 +11,33 @@ import org.springframework.core.retry.RetryTemplate;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
-import org.springframework.ai.google.genai.embedding.GoogleGenAiEmbeddingConnectionDetails;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import com.google.genai.Client;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.Duration;
 
 @Configuration
 @EnableAsync
 public class AppConfig {
+    // Gemini API key for last-resort chat fallback
+    @Value("${spring.ai.google.genai.api-key:}")
+    private String geminiApiKey;
+
     @Bean(name = "geminiFallbackChatModel")
     ChatModel geminiFallbackChatModel(
-            GoogleGenAiEmbeddingConnectionDetails connectionDetails,
             ToolCallingManager toolCallingManager,
             RetryTemplate retryTemplate,
             ObservationRegistry observationRegistry) {
+        // Create a GenAi client directly from the API key
+        Client genAiClient = Client.builder()
+                .apiKey(geminiApiKey)
+                .build();
+
         return GoogleGenAiChatModel.builder()
-                .genAiClient(connectionDetails.getGenAiClient())
+                .genAiClient(genAiClient)
                 .options(GoogleGenAiChatOptions.builder().model("gemini-2.5-flash").build())
                 .toolCallingManager(toolCallingManager)
                 .retryTemplate(retryTemplate)
