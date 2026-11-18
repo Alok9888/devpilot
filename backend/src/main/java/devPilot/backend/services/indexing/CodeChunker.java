@@ -39,6 +39,10 @@ public class CodeChunker {
             return List.of();
         }
 
+        // Sanitize input: remove null bytes that cause UTF8 encoding errors in Postgres
+        content = sanitize(content);
+        filePath = sanitize(filePath);
+
         String language = fileFilter.detectLanguage(filePath);
         String header = "// File: " + filePath + "\n";
 
@@ -102,11 +106,17 @@ public class CodeChunker {
             String language,
             int chunkIndex) {
         Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
-        metadata.put(RagSettings.METADATA_REPO_ID, repoId);
+        metadata.put(RagSettings.METADATA_REPO_ID, sanitize(repoId));
         metadata.put(RagSettings.METADATA_USER_ID, userId.toString());
-        metadata.put("filePath", filePath);
-        metadata.put("language", language);
+        metadata.put("filePath", sanitize(filePath));
+        metadata.put("language", sanitize(language));
         metadata.put("chunkIndex", chunkIndex);
-        return new Document(chunk.getText(), metadata);
+        return new Document(sanitize(chunk.getText()), metadata);
+    }
+
+    /** Remove null bytes that cause UTF8 encoding errors in Postgres TEXT/jsonb columns. */
+    private static String sanitize(String input) {
+        if (input == null) return null;
+        return input.replace("\u0000", "").replace("\0", "");
     }
 }

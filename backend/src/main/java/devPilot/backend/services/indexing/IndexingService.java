@@ -352,6 +352,12 @@ public class IndexingService {
                 log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
                 return true;
             } catch (RuntimeException e) {
+                // UTF-8 null byte errors cannot be fixed by retrying - log and skip batch
+                if (isUtf8NullByteError(e)) {
+                    log.error("{} [EMBED] batch contains null bytes, skipping chunks repoId={}: {}",
+                            Instant.now(), repoId, e.getMessage());
+                    return false;
+                }
                 if (!isRetryableError(e) || attempt >= RETRY_DELAYS_MS.length) {
                     log.error("{} [EMBED] batch failed after {} retries repoId={}: {}",
                             Instant.now(), attempt, repoId, e.getMessage());
@@ -377,6 +383,17 @@ public class IndexingService {
             if (message.contains("429") || message.contains("503")
                     || message.contains("quota_exceeded") || message.contains("resource_exhausted")
                     || message.contains("service_unavailable")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Check if error is UTF-8 null byte encoding error from Postgres. */
+    private static boolean isUtf8NullByteError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("invalid byte sequence for encoding utf8") && message.contains("0x00")) {
                 return true;
             }
         }
