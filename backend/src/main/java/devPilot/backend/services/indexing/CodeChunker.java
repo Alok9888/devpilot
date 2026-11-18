@@ -40,21 +40,21 @@ public class CodeChunker {
         }
 
         // Sanitize input: remove null bytes that cause UTF8 encoding errors in Postgres
-        content = sanitize(content);
-        filePath = sanitize(filePath);
+        String sanitizedContent = sanitize(content);
+        String sanitizedFilePath = sanitize(filePath);
 
-        String language = fileFilter.detectLanguage(filePath);
-        String header = "// File: " + filePath + "\n";
+        String language = fileFilter.detectLanguage(sanitizedFilePath);
+        String header = "// File: " + sanitizedFilePath + "\n";
 
         // Add userId metadata to each chunk
-        Document source = new Document(header + content, baseMetadata(userId, repoId, filePath, language));
+        Document source = new Document(header + sanitizedContent, baseMetadata(userId, repoId, sanitizedFilePath, language));
         List<Document> split = splitter.apply(List.of(source));
 
         // Apply 10% overlap manually
-        List<Document> overlapped = applyOverlap(split, userId, repoId, filePath, language);
+        List<Document> overlapped = applyOverlap(split, userId, repoId, sanitizedFilePath, language);
 
         return IntStream.range(0, overlapped.size())
-                .mapToObj(i -> withChunkIndex(overlapped.get(i), userId, repoId, filePath, language, i))
+                .mapToObj(i -> withChunkIndex(overlapped.get(i), userId, repoId, sanitizedFilePath, language, i))
                 .toList();
     }
 
@@ -64,6 +64,7 @@ public class CodeChunker {
         }
 
         List<Document> result = new ArrayList<>();
+        final int overlapChars = overlapTokens * 4; // ~4 chars per token, effectively final
         for (int i = 0; i < chunks.size(); i++) {
             Document current = chunks.get(i);
             if (i == 0) {
@@ -74,7 +75,7 @@ public class CodeChunker {
                 String prevText = prev.getText();
                 String currText = current.getText();
 
-                int overlapStart = Math.max(0, prevText.length() - (overlapTokens * 4)); // ~4 chars per token
+                int overlapStart = Math.max(0, prevText.length() - overlapChars);
                 String overlap = prevText.substring(overlapStart);
 
                 Map<String, Object> metadata = new HashMap<>(current.getMetadata());
