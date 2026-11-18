@@ -59,20 +59,11 @@
             <artifactId>spring-ai-starter-model-google-genai</artifactId>
         </dependency>
 
-        <!-- Groq's OpenAI-compatible chat API -->
+        <!-- NVIDIA/Groq via OpenAI-compatible API -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
-
-
-        <!-- Gemini embeddings for repository indexing -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-google-genai-embedding</artifactId>
-        </dependency>
-
-        
 
         <!-- PostgreSQL Vector Store -->
         <dependency>
