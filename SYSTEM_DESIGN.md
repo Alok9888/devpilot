@@ -137,7 +137,7 @@ The backend currently expects these Render variables/properties:
 | `APP_CORS_ALLOWED_ORIGINS` | Allowed browser origins (comma-separated) |
 | `NEXT_PUBLIC_API_BASE_URL` | Optional frontend rewrite destination (frontend deploy) |
 
-The latest source config uses `https://integrate.api.nvidia.com/v1` and model `nvidia/nv-embedqa-e5-v5`; pgvector is configured for 1024 dimensions. The exact Spring AI embedding auto-configuration behavior must be confirmed by a successful backend startup/package and a real embedding call; configuration spelling alone does not prove the model bean is active.
+The latest source config uses `https://integrate.api.nvidia.com/v1` and model `nvidia/nemotron-3.5-embed-1b`; pgvector is configured for 768 dimensions. The exact Spring AI embedding auto-configuration behavior must be confirmed by a successful backend startup/package and a real embedding call; configuration spelling alone does not prove the model bean is active.
 
 Locally, `docker-compose.yml` starts only PostgreSQL with pgvector on host port 5433. Start the Spring app separately, then start the Next.js app separately.
 
