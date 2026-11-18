@@ -4,18 +4,28 @@ import java.util.concurrent.Executor;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.scheduling.annotation.EnableAsync;
-import org.springframework.web.client.RestClient;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingOptions;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.google.genai.Client;
+import com.openai.client.OpenAIClient;
+import com.openai.client.OpenAIClientImpl;
+import com.openai.core.ClientOptions;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
 import java.time.Duration;
 
@@ -51,14 +61,6 @@ public class AppConfig {
         return new RetryTemplate(RetryPolicy.withMaxRetries(0));
     }
 
-    @Bean
-    RestClient.Builder restClientBuilder() {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(5));
-        requestFactory.setReadTimeout(Duration.ofSeconds(20));
-        return RestClient.builder().requestFactory(requestFactory);
-    }
-
     @Bean(name = "indexingExecutor")
     Executor indexingExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -90,5 +92,65 @@ public class AppConfig {
         executor.setThreadNamePrefix("rag-");
         executor.initialize();
         return executor;
+    }
+
+    // NVIDIA embedding model configuration with dedicated API key and base URL
+    @Value("${spring.ai.openai.embedding.base-url:https://integrate.api.nvidia.com/v1}")
+    private String nvEmbeddingBaseUrl;
+
+    @Value("${spring.ai.openai.embedding.api-key:}")
+    private String nvApiKey;
+
+    @Value("${spring.ai.openai.embedding.model:}")
+    private String nvEmbeddingModel;
+
+    /**
+     * Creates OpenAIClient for NVIDIA embeddings with its own base URL and API key.
+     * This separates NV embedding auth from Groq chat auth.
+     */
+    @Bean(name = "nvOpenAIClient")
+    OpenAIClient nvOpenAIClient() {
+        ClientOptions clientOptions = ClientOptions.builder()
+                .apiKey(nvApiKey)
+                .baseUrl(nvEmbeddingBaseUrl)
+                .timeout(Duration.ofSeconds(60))
+                .maxRetries(0)
+                .build();
+        return new OpenAIClientImpl(clientOptions);
+    }
+
+    /**
+     * NVIDIA embedding model with dedicated API key.
+     * This avoids sharing the Groq API key for NV embeddings.
+     */
+    @Bean(name = "nvEmbeddingModel")
+    EmbeddingModel nvEmbeddingModel(OpenAIClient nvOpenAIClient) {
+        return OpenAiEmbeddingModel.builder()
+                .openAiClient(nvOpenAIClient)
+                .options(OpenAiEmbeddingOptions.builder()
+                        .model(nvEmbeddingModel)
+                        .dimensions(768)
+                        .build())
+                .build();
+    }
+
+    /**
+     * Custom PGVector store with NV embedding model.
+     * This ensures embeddings go through NVIDIA's endpoint with its own API key,
+     * not the Groq API key.
+     */
+    @Primary
+    @Bean
+    VectorStore pgVectorStore(
+            JdbcTemplate jdbcTemplate,
+            EmbeddingModel nvEmbeddingModel,
+            ObservationRegistry observationRegistry) {
+        return PgVectorStore.builder(jdbcTemplate, nvEmbeddingModel)
+                .dimensions(768)
+                .vectorTableName("devpilot_vectors_nv_768")
+                .indexType(PgIndexType.HNSW)
+                .distanceType(PgDistanceType.COSINE_DISTANCE)
+                .initializeSchema(true)
+                .build();
     }
 }
