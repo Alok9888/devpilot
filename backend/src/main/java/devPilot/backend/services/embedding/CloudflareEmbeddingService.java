@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
  * Supports both indexing and query-time embedding with the same model.
  */
 @Service
-@ConditionalOnProperty(name = "embedding.provider", havingValue = "cloudflare")
+@ConditionalOnProperty(name = "embedding.provider", havingValue = "cloudflare", matchIfMissing = true)
 public class CloudflareEmbeddingService implements EmbeddingModel {
 
     private static final Logger log = LoggerFactory.getLogger(CloudflareEmbeddingService.class);
