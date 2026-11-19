@@ -58,18 +58,4 @@ public class NvidiaEmbeddingConfig {
             @Value("${spring.ai.openai.embedding.dimensions:768}") Integer dimensions) {
         return new NvidiaEmbeddingModel(nvOpenAIClient, modelName, dimensions);
     }
-
-    @Bean
-    VectorStore pgVectorStore(
-            JdbcTemplate jdbcTemplate,
-            EmbeddingModel nvEmbeddingModel,
-            ObservationRegistry observationRegistry) {
-        return PgVectorStore.builder(jdbcTemplate, nvEmbeddingModel)
-                .dimensions(768)
-                .vectorTableName("devpilot_vectors_nv_768")
-                .indexType(PgIndexType.HNSW)
-                .distanceType(PgDistanceType.COSINE_DISTANCE)
-                .initializeSchema(true)
-                .build();
-    }
 }

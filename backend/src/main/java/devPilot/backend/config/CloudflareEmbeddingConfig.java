@@ -32,23 +32,7 @@ public class CloudflareEmbeddingConfig {
     }
 
     @Bean
-    @Primary
     EmbeddingModel embeddingModel(CloudflareEmbeddingService cloudflareEmbeddingService) {
         return cloudflareEmbeddingService;
-    }
-
-    @Bean
-    @Primary
-    VectorStore pgVectorStore(
-            JdbcTemplate jdbcTemplate,
-            EmbeddingModel embeddingModel,
-            ObservationRegistry observationRegistry) {
-        return PgVectorStore.builder(jdbcTemplate, embeddingModel)
-                .dimensions(384)
-                .vectorTableName("devpilot_vectors_cf_384")
-                .indexType(PgIndexType.HNSW)
-                .distanceType(PgDistanceType.COSINE_DISTANCE)
-                .initializeSchema(true)
-                .build();
     }
 }
