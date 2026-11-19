@@ -11,7 +11,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import io.micrometer.observation.ObservationRegistry;
-import org.springframework.beans.factory.ObjectProvider;
 
 import devPilot.backend.services.embedding.CloudflareEmbeddingService;
 
@@ -31,18 +30,17 @@ public class CloudflareEmbeddingConfig {
         return new CloudflareEmbeddingService(account_id, api_token, jdbcTemplate);
     }
 
-    @Bean(name = "nvEmbeddingModel")
-    EmbeddingModel nvEmbeddingModel(CloudflareEmbeddingService cloudflareEmbeddingService) {
-        // Return the Cloudflare service as the embedding model
+    @Bean
+    EmbeddingModel embeddingModel(CloudflareEmbeddingService cloudflareEmbeddingService) {
         return cloudflareEmbeddingService;
     }
 
     @Bean
     VectorStore pgVectorStore(
             JdbcTemplate jdbcTemplate,
-            EmbeddingModel cloudflareEmbeddingService,
+            EmbeddingModel embeddingModel,
             ObservationRegistry observationRegistry) {
-        return PgVectorStore.builder(jdbcTemplate, cloudflareEmbeddingService)
+        return PgVectorStore.builder(jdbcTemplate, embeddingModel)
                 .dimensions(384)
                 .vectorTableName("devpilot_vectors_cf_384")
                 .indexType(PgIndexType.HNSW)
