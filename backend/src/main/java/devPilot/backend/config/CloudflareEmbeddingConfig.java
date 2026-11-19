@@ -16,7 +16,7 @@ import devPilot.backend.services.embedding.CloudflareEmbeddingService;
  * Activated when embedding.provider=cloudflare.
  */
 @Configuration
-@ConditionalOnProperty(name = "EMBEDDING_PROVIDER", havingValue = "cloudflare", matchIfMissing = true)
+@ConditionalOnProperty(name = "embedding.provider", havingValue = "cloudflare", matchIfMissing = true)
 public class CloudflareEmbeddingConfig {
 
     @Bean
