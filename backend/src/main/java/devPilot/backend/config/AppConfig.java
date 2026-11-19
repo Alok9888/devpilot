@@ -22,7 +22,6 @@ import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.google.genai.Client;
-import com.openai.client.OpenAIClient;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.beans.factory.annotation.Value;
@@ -91,72 +90,5 @@ public class AppConfig {
         executor.setThreadNamePrefix("rag-");
         executor.initialize();
         return executor;
-    }
-
-    // NVIDIA embedding model configuration with dedicated API key and base URL
-    @Value("${spring.ai.openai.embedding.base-url:https://integrate.api.nvidia.com/v1}")
-    private String nvEmbeddingBaseUrl;
-
-    @Value("${spring.ai.openai.embedding.api-key:}")
-    private String nvApiKey;
-
-    @Value("${spring.ai.openai.embedding.model:}")
-    private String nvEmbeddingModelName;
-
-    @Value("${spring.ai.openai.embedding.dimensions:768}")
-    private Integer embeddingDimensions;
-
-    /**
-     * Creates OpenAIClient for NVIDIA embeddings using Spring AI's OpenAiSetup.
-     * This separates NV embedding auth from Groq chat auth.
-     */
-    @Bean(name = "nvOpenAIClient")
-    OpenAIClient nvOpenAIClient(ObservationRegistry observationRegistry,
-                                ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meterRegistry) {
-        return org.springframework.ai.openai.setup.OpenAiSetup.setupSyncClient(
-                nvEmbeddingBaseUrl,                              // baseUrl
-                nvApiKey,                                        // apiKey
-                null,                                            // credential
-                null,                                            // azureDeploymentName
-                null,                                            // azureOpenAiServiceVersion
-                null,                                            // organizationId
-                false,                                           // isAzure
-                false,                                           // isGitHubModels
-                nvEmbeddingModelName,                          // modelName
-                Duration.ofSeconds(60),                        // timeout
-                0,                                               // maxRetries
-                null,                                            // proxy
-                null,                                            // customHeaders
-                observationRegistry,                             // observationRegistry
-                meterRegistry.getIfUnique(() -> null),         // meterRegistry
-                List.of()                                        // httpClientCustomizers
-        );
-    }
-
-    /**
-     * NVIDIA embedding model that injects input_type parameter.
-     * NVIDIA's Nemotron-3.5-embed-1b requires input_type ("passage" or "query")
-     * in the request body.
-     */
-    @Bean(name = "nvEmbeddingModel")
-    EmbeddingModel nvEmbeddingModel(OpenAIClient nvOpenAIClient) {
-        return new NvidiaEmbeddingModel(nvOpenAIClient, nvEmbeddingModelName, embeddingDimensions);
-    }
-
-    /**
-     * PGVector store for indexing operations (uses passage mode for embeddings).
-     */
-    @Bean
-    VectorStore pgVectorStore(
-            JdbcTemplate jdbcTemplate,
-            EmbeddingModel nvEmbeddingModel,
-            ObservationRegistry observationRegistry) {
-        return PgVectorStore.builder(jdbcTemplate, nvEmbeddingModel)
-                .dimensions(768)
-                .vectorTableName("devpilot_vectors_nv_768")
-                .indexType(PgIndexType.HNSW)
-                .distanceType(PgDistanceType.COSINE_DISTANCE)
-                .initializeSchema(true)
-                .build();
     }
 }
