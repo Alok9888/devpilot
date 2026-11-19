@@ -1,6 +1,7 @@
 package devPilot.backend.config;
 
 import java.util.concurrent.Executor;
+import java.util.List;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,15 +16,15 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
+import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.google.genai.Client;
 import com.openai.client.OpenAIClient;
-import com.openai.client.OpenAIClientImpl;
-import com.openai.core.ClientOptions;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.beans.factory.annotation.Value;
@@ -105,18 +106,30 @@ public class AppConfig {
     private String nvEmbeddingModel;
 
     /**
-     * Creates OpenAIClient for NVIDIA embeddings with its own base URL and API key.
+     * Creates OpenAIClient for NVIDIA embeddings using Spring AI's OpenAiSetup.
      * This separates NV embedding auth from Groq chat auth.
      */
     @Bean(name = "nvOpenAIClient")
-    OpenAIClient nvOpenAIClient() {
-        ClientOptions clientOptions = ClientOptions.builder()
-                .apiKey(nvApiKey)
-                .baseUrl(nvEmbeddingBaseUrl)
-                .timeout(Duration.ofSeconds(60))
-                .maxRetries(0)
-                .build();
-        return new OpenAIClientImpl(clientOptions);
+    OpenAIClient nvOpenAIClient(ObservationRegistry observationRegistry,
+                                ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meterRegistry) {
+        return org.springframework.ai.openai.setup.OpenAiSetup.setupSyncClient(
+                nvEmbeddingBaseUrl,                              // baseUrl
+                nvApiKey,                                        // apiKey
+                null,                                            // credential
+                null,                                            // azureDeploymentName
+                null,                                            // azureOpenAiServiceVersion
+                null,                                            // organizationId
+                false,                                           // isAzure
+                false,                                           // isGitHubModels
+                nvEmbeddingModel,                              // modelName
+                Duration.ofSeconds(60),                        // timeout
+                0,                                               // maxRetries
+                null,                                            // proxy
+                null,                                            // customHeaders
+                observationRegistry,                             // observationRegistry
+                meterRegistry.getIfUnique(() -> null),         // meterRegistry
+                List.of()                                        // httpClientCustomizers
+        );
     }
 
     /**
