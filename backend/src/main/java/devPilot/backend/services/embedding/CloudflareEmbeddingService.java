@@ -9,6 +9,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -54,11 +55,10 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
     private final ThreadLocal<AtomicInteger> retryCount = ThreadLocal.withInitial(() -> new AtomicInteger(0));
 
     public CloudflareEmbeddingService(
-            @org.springframework.beans.factory.annotation.Value("${CLOUDFLARE_ACCOUNT_ID:}") String account_id,
-            @org.springframework.beans.factory.annotation.Value("${CLOUDFLARE_API_TOKEN:}") String api_token,
+            Environment env,
             JdbcTemplate jdbcTemplate) {
-        this.account_id = account_id;
-        this.api_token = api_token;
+        this.account_id = env.getProperty("CLOUDFLARE_ACCOUNT_ID");
+        this.api_token = env.getProperty("CLOUDFLARE_API_TOKEN");
         this.jdbcTemplate = jdbcTemplate;
         // Schema initialization is handled by PgVectorStore.initializeSchema(true)
     }
