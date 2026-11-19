@@ -1,0 +1,8 @@
+# Ignore build artifacts, local git state, and node modules
+target/
+.git/
+node_modules/
+.idea/
+.vscode/
+*.log
+.mvn/wrapper/maven-wrapper.jar

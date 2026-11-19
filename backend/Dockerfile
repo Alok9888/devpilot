@@ -3,8 +3,15 @@ WORKDIR /app
 
 ENV MAVEN_OPTS="-Xms64m -Xmx256m -XX:+UseSerialGC"
 
-COPY . .
-RUN chmod +x mvnw && ./mvnw -DskipTests package
+# Copy pom and run dependency:go-offline first to cache dependencies
+COPY pom.xml .
+COPY .mvn .mvn
+COPY mvnw .
+RUN chmod +x mvnw && ./mvnw dependency:go-offline
+
+# Copy source and build
+COPY src ./src
+RUN ./mvnw -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
