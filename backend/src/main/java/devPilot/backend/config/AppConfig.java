@@ -2,6 +2,8 @@ package devPilot.backend.config;
 
 import java.util.concurrent.Executor;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,9 +15,6 @@ import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.ai.openai.OpenAiEmbeddingModel;
-import org.springframework.ai.openai.OpenAiEmbeddingOptions;
-import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
@@ -102,7 +101,10 @@ public class AppConfig {
     private String nvApiKey;
 
     @Value("${spring.ai.openai.embedding.model:}")
-    private String nvEmbeddingModel;
+    private String nvEmbeddingModelName;
+
+    @Value("${spring.ai.openai.embedding.dimensions:768}")
+    private Integer embeddingDimensions;
 
     /**
      * Creates OpenAIClient for NVIDIA embeddings using Spring AI's OpenAiSetup.
@@ -120,7 +122,7 @@ public class AppConfig {
                 null,                                            // organizationId
                 false,                                           // isAzure
                 false,                                           // isGitHubModels
-                nvEmbeddingModel,                              // modelName
+                nvEmbeddingModelName,                          // modelName
                 Duration.ofSeconds(60),                        // timeout
                 0,                                               // maxRetries
                 null,                                            // proxy
@@ -132,24 +134,17 @@ public class AppConfig {
     }
 
     /**
-     * NVIDIA embedding model with dedicated API key.
-     * This avoids sharing the Groq API key for NV embeddings.
+     * NVIDIA embedding model that injects input_type parameter.
+     * NVIDIA's Nemotron-3.5-embed-1b requires input_type ("passage" or "query")
+     * in the request body.
      */
     @Bean(name = "nvEmbeddingModel")
     EmbeddingModel nvEmbeddingModel(OpenAIClient nvOpenAIClient) {
-        return OpenAiEmbeddingModel.builder()
-                .openAiClient(nvOpenAIClient)
-                .options(OpenAiEmbeddingOptions.builder()
-                        .model(nvEmbeddingModel)
-                        .dimensions(768)
-                        .build())
-                .build();
+        return new NvidiaEmbeddingModel(nvOpenAIClient, nvEmbeddingModelName, embeddingDimensions);
     }
 
     /**
-     * Custom PGVector store with NV embedding model.
-     * This ensures embeddings go through NVIDIA's endpoint with its own API key,
-     * not the Groq API key.
+     * PGVector store for indexing operations (uses passage mode for embeddings).
      */
     @Bean
     VectorStore pgVectorStore(
