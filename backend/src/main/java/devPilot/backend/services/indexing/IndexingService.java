@@ -44,7 +44,8 @@ public class IndexingService {
     private static final int PARALLEL_FETCH_WORKERS = 8;
     private static final long RETRIEVAL_TIMEOUT_MS = 120000; // 2 minutes total timeout
 
-    private static final int[] RETRY_DELAYS_MS = {2000, 5000, 10000};
+    private static final int MAX_RETRIES = 3;
+    private static final long BASE_RETRY_DELAY_MS = 2000;
 
     private final RepositoryRepository repositoryRepository;
     private final GithubApiClient gitHubApiClient;
@@ -344,41 +345,63 @@ public class IndexingService {
     private void storeChunks(List<Document> chunks, UUID repoId) {
         int batchSize = VECTOR_BATCH_SIZE;
         for (int i = 0; i < chunks.size(); i += batchSize) {
+            int start = i;
             int end = Math.min(i + batchSize, chunks.size());
             List<Document> batch = chunks.subList(i, end);
 
-            boolean success = addBatchWithRetry(batch, repoId);
+            boolean success = addBatchWithRetry(batch, repoId, start, end);
             if (!success) {
-                log.error("Failed to store batch {}-{} for repo {}", i, end, repoId);
+                log.error("Failed to store batch {}-{} for repo {} - embeddingFailed flag set", start, end, repoId);
                 embeddingFailed = true;
             }
         }
     }
 
-    private boolean addBatchWithRetry(List<Document> batch, UUID repoId) {
-        log.info("{} [INDEX] vector batch start repoId={} chunks={}", Instant.now(), repoId, batch.size());
+    private boolean addBatchWithRetry(List<Document> batch, UUID repoId, int start, int end) {
+        log.info("{} [INDEX] vector batch start repoId={} chunks={}-{}", Instant.now(), repoId, start, end);
 
-        for (int attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+        // First, try to embed with 422-safe handling
+        if (containsContentSafetyError(batch, repoId, start, end)) {
+            // Try to embed individual chunks, skipping problematic ones
+            return embedBatchWithContentSafetyHandling(batch, repoId, start, end);
+        }
+
+        // Try with exponential backoff for 503 errors
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 vectorStore.add(batch);
-                log.info("{} [INDEX] vector batch done repoId={} chunks={}", Instant.now(), repoId, batch.size());
+                log.info("{} [INDEX] vector batch done repoId={} chunks={}-{}", Instant.now(), repoId, start, end);
                 return true;
             } catch (RuntimeException e) {
+                // Log full exception details including model and chunk range
+                logFullError(e, repoId, start, end);
+
                 // UTF-8 null byte errors cannot be fixed by retrying - log and skip batch
                 if (isUtf8NullByteError(e)) {
-                    log.error("{} [EMBED] batch contains null bytes, skipping chunks repoId={}: {}",
-                            Instant.now(), repoId, e.getMessage());
+                    log.error("{} [EMBED] batch contains null bytes, skipping chunks repoId={}-{}: {}",
+                            Instant.now(), repoId, start, end, e.getMessage());
                     return false;
                 }
-                if (!isRetryableError(e) || attempt >= RETRY_DELAYS_MS.length) {
-                    log.error("{} [EMBED] batch failed after {} retries repoId={}: {}",
-                            Instant.now(), attempt, repoId, e.getMessage());
+
+                // Check if this is a content safety error (422) - handled separately
+                if (isContentSafetyError(e)) {
+                    log.warn("{} [EMBED] content safety error detected, will split batch", Instant.now());
+                    // Continue to embedBatchWithContentSafetyHandling
+                    return embedBatchWithContentSafetyHandling(batch, repoId, start, end);
+                }
+
+                if (!isRetryableError(e) || attempt >= MAX_RETRIES) {
+                    log.error("{} [EMBED] batch failed after {} retries repoId={}-{}: {}",
+                            Instant.now(), attempt, repoId, start, end, e.getMessage());
                     return false;
                 }
-                log.warn("{} [EMBED] batch failed, retrying (attempt {}/{}) repoId={} in {}ms: {}",
-                        Instant.now(), attempt + 1, RETRY_DELAYS_MS.length + 1, repoId, RETRY_DELAYS_MS[attempt], e.getMessage());
+
+                // Exponential backoff for retry
+                long delay = (long) (BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+                log.warn("{} [EMBED] batch failed, retrying (attempt {}/{}) repoId={}-{} in {}ms: {}",
+                        Instant.now(), attempt + 1, MAX_RETRIES + 1, repoId, start, end, delay, e.getMessage());
                 try {
-                    Thread.sleep(RETRY_DELAYS_MS[attempt]);
+                    Thread.sleep(delay);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     log.error("Interrupted during embedding retry");
@@ -389,12 +412,108 @@ public class IndexingService {
         return false;
     }
 
+    /**
+     * Check if any chunk in the batch might cause content safety screening issues.
+     */
+    private boolean containsContentSafetyError(List<Document> batch, UUID repoId, int start, int end) {
+        // We'll detect this during the actual embedding attempt
+        return false;
+    }
+
+    /**
+     * Embed a batch when content safety errors are detected.
+     * Splits the batch and embeds individual chunks, skipping only the bad ones.
+     */
+    private boolean embedBatchWithContentSafetyHandling(List<Document> batch, UUID repoId, int start, int end) {
+        log.info("{} [EMBED] splitting batch {}-{} for content safety, processing individually",
+                 Instant.now(), start, end);
+
+        List<Document> successfullyEmbedded = new ArrayList<>();
+        int embeddedCount = 0;
+
+        for (int i = 0; i < batch.size(); i++) {
+            Document doc = batch.get(i);
+            try {
+                // Try embedding single document
+                vectorStore.add(List.of(doc));
+                successfullyEmbedded.add(doc);
+                embeddedCount++;
+            } catch (RuntimeException e) {
+                if (isContentSafetyError(e)) {
+                    log.warn("{} [EMBED] skipping content-safe chunk {} in batch {}-{}",
+                             Instant.now(), start + i, start, end);
+                } else {
+                    log.warn("{} [EMBED] failed to embed chunk {}: {}",
+                             Instant.now(), start + i, e.getMessage());
+                }
+            }
+        }
+
+        if (embeddedCount > 0) {
+            log.info("{} [INDEX] embedded {} chunks from batch {}-{}, skipped {} problematic chunks",
+                     Instant.now(), embeddedCount, start, end, batch.size() - embeddedCount);
+            return true;
+        }
+
+        log.error("{} [EMBED] no chunks in batch {}-{} could be embedded due to content safety",
+                  Instant.now(), start, end);
+        return false;
+    }
+
+    /**
+     * Log full exception details with model information.
+     */
+    private void logFullError(RuntimeException e, UUID repoId, int start, int end) {
+        // Build a detailed error message
+        StringBuilder details = new StringBuilder();
+        details.append("Status: embedding failed");
+        details.append(", repoId: ").append(repoId);
+        details.append(", chunkRange: ").append(start).append("-").append(end);
+        details.append(", model: ").append(getEmbeddingModelName());
+        details.append(", error: ").append(e.getMessage());
+
+        // Try to extract more details from the exception chain
+        for (Throwable current = e; current != null; current = current.getCause()) {
+            String msg = current.getMessage();
+            if (msg != null && !msg.equals(e.getMessage())) {
+                details.append(", cause: ").append(msg);
+            }
+            // Check for JSON response body
+            if (msg != null && msg.contains("{")) {
+                details.append(", body: ").append(msg);
+                break;
+            }
+        }
+
+        log.error("{} [EMBED] {}", Instant.now(), details.toString(), e);
+    }
+
+    /**
+     * Get the embedding model name from configuration.
+     */
+    @Value("${spring.ai.openai.embedding.model:nvidia/nemotron-3.5-embed-1b}")
+    private String embeddingModelName;
+
+    private String getEmbeddingModelName() {
+        return embeddingModelName != null ? embeddingModelName : "nvidia/nemotron-3.5-embed-1b";
+    }
+
     private static boolean isRetryableError(Throwable error) {
         for (Throwable current = error; current != null; current = current.getCause()) {
             String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
             if (message.contains("429") || message.contains("503")
                     || message.contains("quota_exceeded") || message.contains("resource_exhausted")
                     || message.contains("service_unavailable")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isContentSafetyError(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = String.valueOf(current.getMessage()).toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("422") || message.contains("content safety") || message.contains("rejected")) {
                 return true;
             }
         }
