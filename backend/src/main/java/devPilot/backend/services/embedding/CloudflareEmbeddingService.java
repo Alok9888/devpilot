@@ -31,7 +31,6 @@ import org.slf4j.LoggerFactory;
  * Uses 384 dimensions, optimized for speed.
  * Supports both indexing and query-time embedding with the same model.
  */
-@Service
 @ConditionalOnProperty(name = "embedding.provider", havingValue = "cloudflare", matchIfMissing = true)
 public class CloudflareEmbeddingService implements EmbeddingModel {
 
