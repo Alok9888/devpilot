@@ -5,7 +5,6 @@ import java.util.List;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
@@ -152,7 +151,6 @@ public class AppConfig {
      * This ensures embeddings go through NVIDIA's endpoint with its own API key,
      * not the Groq API key.
      */
-    @Primary
     @Bean
     VectorStore pgVectorStore(
             JdbcTemplate jdbcTemplate,
