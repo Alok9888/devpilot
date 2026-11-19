@@ -35,4 +35,15 @@ public class CloudflareEmbeddingConfig {
     EmbeddingModel embeddingModel(CloudflareEmbeddingService cloudflareEmbeddingService) {
         return cloudflareEmbeddingService;
     }
+
+    @Bean
+    VectorStore vectorStore(JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel) {
+        return PgVectorStore.builder(jdbcTemplate, embeddingModel)
+            .dimensions(384)
+            .vectorTableName("devpilot_vectors_cf_384")
+            .indexType(PgIndexType.HNSW)
+            .distanceType(PgDistanceType.COSINE_DISTANCE)
+            .initializeSchema(true)
+            .build();
+    }
 }
