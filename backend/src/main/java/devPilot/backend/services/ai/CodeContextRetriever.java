@@ -73,7 +73,7 @@ public class CodeContextRetriever {
     }
 
     private java.util.List<Document> retryVectorSearch(SearchRequest search) {
-        int[] delays = {2000, 5000, 10000};
+        int[] delays = {2000, 4000, 8000, 16000}; // Exponential backoff
         RuntimeException lastError = null;
 
         for (int attempt = 0; attempt <= delays.length; attempt++) {
@@ -84,10 +84,11 @@ public class CodeContextRetriever {
                 if (!isRetryableError(e) || attempt >= delays.length) {
                     break;
                 }
+                long delay = (long) (delays[0] * Math.pow(2, attempt));
                 log.warn("{} [EMBED] vector search failed (attempt {}/{}); retrying in {}ms: {}",
-                        Instant.now(), attempt + 1, delays.length + 1, delays[attempt], e.getMessage());
+                        Instant.now(), attempt + 1, delays.length + 1, delay, e.getMessage());
                 try {
-                    Thread.sleep(delays[attempt]);
+                    Thread.sleep(delay);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during embedding retry", ie);

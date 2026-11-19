@@ -40,7 +40,7 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @Slf4j
 public class IndexingService {
-    private static final int VECTOR_BATCH_SIZE = 32;
+    private static final int VECTOR_BATCH_SIZE = 16;
     private static final int PARALLEL_FETCH_WORKERS = 8;
     private static final long RETRIEVAL_TIMEOUT_MS = 120000; // 2 minutes total timeout
 
