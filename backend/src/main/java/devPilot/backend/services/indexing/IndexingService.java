@@ -57,6 +57,8 @@ public class IndexingService {
     @Value("${app.indexing.max-file-bytes:102400}")
     private long maxFileBytes;
 
+    private boolean embeddingFailed = false;
+
     public Repository startIndexing(UUID repoId, UUID userId) {
         Repository repo = repositoryRepository.findByIdAndUserId(repoId, userId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
@@ -140,6 +142,13 @@ public class IndexingService {
 
         // Store all chunks
         storeChunks(allChunks, repoId);
+
+        // If embedding failed, mark the repository as failed instead of ready
+        if (embeddingFailed) {
+            markFailed(repoId, "Embedding batch failed - check logs for details");
+            log.warn("{} [INDEX] aborted due to embedding failure repoId={}", Instant.now(), repoId);
+            return;
+        }
 
         int skippedCount = result.unchangedFiles.size();
 
@@ -243,6 +252,8 @@ public class IndexingService {
             Repository repo, UUID userId, UUID repoId,
             List<String> newFiles, List<String> changedFiles) {
 
+        embeddingFailed = false;  // Reset flag for each indexing run
+
         List<String> filesToFetch = new ArrayList<>(newFiles);
         filesToFetch.addAll(changedFiles);
 
@@ -339,6 +350,7 @@ public class IndexingService {
             boolean success = addBatchWithRetry(batch, repoId);
             if (!success) {
                 log.error("Failed to store batch {}-{} for repo {}", i, end, repoId);
+                embeddingFailed = true;
             }
         }
     }
