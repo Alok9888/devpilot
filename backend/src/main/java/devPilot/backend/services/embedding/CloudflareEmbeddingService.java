@@ -60,9 +60,7 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
         this.account_id = account_id;
         this.api_token = api_token;
         this.jdbcTemplate = jdbcTemplate;
-
-        // Initialize the vector table on startup
-        initializeTable();
+        // Schema initialization is handled by PgVectorStore.initializeSchema(true)
     }
 
     /**

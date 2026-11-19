@@ -5,7 +5,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication(
         exclude = {
-            org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration.class
+            org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration.class,
+            org.springframework.ai.vectorstore.pgvector.autoconfigure.PgVectorStoreAutoConfiguration.class
         }
 )
 public class BackendApplication {

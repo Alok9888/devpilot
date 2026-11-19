@@ -8,6 +8,7 @@ import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import io.micrometer.observation.ObservationRegistry;
@@ -51,6 +52,7 @@ public class NvidiaEmbeddingConfig {
     }
 
     @Bean(name = "nvEmbeddingModel")
+    @Primary
     EmbeddingModel nvEmbeddingModel(OpenAIClient nvOpenAIClient,
             @Value("${spring.ai.openai.embedding.model:}") String modelName,
             @Value("${spring.ai.openai.embedding.dimensions:768}") Integer dimensions) {

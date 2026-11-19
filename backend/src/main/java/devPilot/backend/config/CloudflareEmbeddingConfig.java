@@ -8,6 +8,7 @@ import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import io.micrometer.observation.ObservationRegistry;
@@ -31,11 +32,13 @@ public class CloudflareEmbeddingConfig {
     }
 
     @Bean
+    @Primary
     EmbeddingModel embeddingModel(CloudflareEmbeddingService cloudflareEmbeddingService) {
         return cloudflareEmbeddingService;
     }
 
     @Bean
+    @Primary
     VectorStore pgVectorStore(
             JdbcTemplate jdbcTemplate,
             EmbeddingModel embeddingModel,
