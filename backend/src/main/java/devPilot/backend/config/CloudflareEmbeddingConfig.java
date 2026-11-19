@@ -3,15 +3,11 @@ package devPilot.backend.config;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
-import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
-import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.annotation.Value;
-import io.micrometer.observation.ObservationRegistry;
 
 import devPilot.backend.services.embedding.CloudflareEmbeddingService;
 
@@ -38,12 +34,12 @@ public class CloudflareEmbeddingConfig {
 
     @Bean
     VectorStore vectorStore(JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel) {
+        jdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS vector");
+        jdbcTemplate.execute("CREATE TABLE IF NOT EXISTS devpilot_vectors_cf_384 (id UUID PRIMARY KEY, repo_id UUID, chunk_id TEXT, embedding vector(384), content TEXT)");
         return PgVectorStore.builder(jdbcTemplate, embeddingModel)
             .dimensions(384)
             .vectorTableName("devpilot_vectors_cf_384")
-            .indexType(PgIndexType.HNSW)
-            .distanceType(PgDistanceType.COSINE_DISTANCE)
-            .initializeSchema(true)
+            .initializeSchema(false)
             .build();
     }
 }
