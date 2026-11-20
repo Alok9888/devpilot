@@ -198,16 +198,24 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
                 throw new RuntimeException("HTTP " + response.statusCode() + ": " + response.body());
             }
 
-            // Parse response
-            com.fasterxml.jackson.databind.JsonNode jsonResponse = objectMapper.readTree(response.body());
-            com.fasterxml.jackson.databind.JsonNode data = jsonResponse.get("result").get("data");
+            // Parse response - structure: {"result": {"shape": [batch, 384], "data": [[...], [...]]}, "success": true}
+            // data is number[][] where data.get(i) is a 384-dim vector for chunk i
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(response.body());
+            com.fasterxml.jackson.databind.JsonNode result = root.get("result");
+            if (result == null) {
+                throw new RuntimeException("Cloudflare embedding API error - no result: " + response.body().substring(0, Math.min(1000, response.body().length())));
+            }
+            com.fasterxml.jackson.databind.JsonNode data = result.get("data");
+            if (data == null) {
+                throw new RuntimeException("Cloudflare embedding API error - no data: " + response.body().substring(0, Math.min(1000, response.body().length())));
+            }
 
             List<float[]> embeddings = new ArrayList<>();
-            for (com.fasterxml.jackson.databind.JsonNode vectorNode : data) {
-                com.fasterxml.jackson.databind.JsonNode vectorArray = vectorNode.get("embedding");
+            for (int i = 0; i < data.size(); i++) {
+                com.fasterxml.jackson.databind.JsonNode vectorArray = data.get(i);  // This is already the 384-dim vector
                 float[] vector = new float[MODEL_DIMENSIONS];
-                for (int i = 0; i < MODEL_DIMENSIONS; i++) {
-                    vector[i] = (float) vectorArray.get(i).asDouble();
+                for (int j = 0; j < MODEL_DIMENSIONS; j++) {
+                    vector[j] = (float) vectorArray.get(j).asDouble();
                 }
                 embeddings.add(vector);
             }
