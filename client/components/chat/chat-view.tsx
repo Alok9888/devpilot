@@ -139,7 +139,8 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
   }
 
   // Stage 0: Creating repo - show overlay while background POST /api/analyze runs
-  if (isCreatingRepo || (initialUrl && !repoIdFromUrl)) {
+  // OR if we have initialUrl but no repoIdFromUrl yet
+  if (initialUrl && !repoIdFromUrl) {
     const tempRepo = {
       id: 'temp',
       githubRepoId: 0,
@@ -181,7 +182,8 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
     );
   }
 
-  if (repoQuery.isError || !repoQuery.data) {
+  // Show error only if we have a real repo query error (not while creating)
+  if (repoQuery.isError && !isCreatingRepo && !initialUrl) {
     return (
       <AppShell title="Repository unavailable">
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
@@ -195,6 +197,22 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
   }
 
   const repo = repoQuery.data;
+
+  // Guard: if no repo data, show loading or return empty
+  if (!repo) {
+    if (initialUrl && !repoIdFromUrl) {
+      // Still in creating stage, show overlay
+      return null;
+    }
+    return (
+      <AppShell title="Loading chat…">
+        <div className="grid flex-1 gap-4 p-4 md:grid-cols-[18rem_1fr]">
+          <Skeleton className="min-h-80 rounded-2xl" />
+          <Skeleton className="min-h-80 rounded-2xl" />
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
