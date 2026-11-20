@@ -36,7 +36,7 @@ export function AddRepoDialog({
     }
   };
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = () => {
     const parsed = extractGitHubOwnerName(repoUrl);
     if (!parsed) {
       toast.add({
@@ -47,37 +47,26 @@ export function AddRepoDialog({
       return;
     }
 
-    try {
-      const repo = await api.analyzeRepo(repoUrl);
+    // Create slug from owner/name for immediate navigation
+    const slug = `${parsed.owner}/${parsed.name}`.toLowerCase();
 
-      // Update cache with the new repo
+    // Navigate to chat page IMMEDIATELY - no await
+    router.push(`/chat/${slug}?url=${encodeURIComponent(repoUrl)}`);
+
+    // Fire POST /api/analyze in background
+    api.analyzeRepo(repoUrl).then(repo => {
+      // Update cache when done
       queryClient.setQueryData<Repository[]>(queryKeys.repos.list(), (old) => {
         if (!old) return [repo];
         const exists = old.find(r => r.id === repo.id);
         if (exists) return old;
         return [...old, repo];
       });
-
-      // Invalidate detail queries
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.repos.detail(repo.id),
-      });
-
-      toast.add({
-        title: "Repository added!",
-        description: `Opening ${repo.fullName}...`,
-        type: "success",
-      });
-
-      // Navigate to chat page immediately
-      router.push(`/chat/${repo.id}`);
-    } catch (error) {
-      toast.add({
-        title: "Failed to analyze repository",
-        description: error instanceof Error ? error.message : "Unknown error",
-        type: "error",
-      });
-    }
+      queryClient.invalidateQueries({ queryKey: queryKeys.repos.detail(repo.id) });
+      toast.add({ title: "Repository added!", description: `Analyzing ${repo.fullName}...`, type: "success" });
+    }).catch(error => {
+      toast.add({ title: "Failed to analyze repository", description: error instanceof Error ? error.message : "Unknown error", type: "error" });
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {

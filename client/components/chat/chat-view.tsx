@@ -18,14 +18,53 @@ import {
   useStreamChat,
 } from "@/hooks/use-chat";
 import { useIndexStatus, useRepository } from "@/hooks/use-repos";
+import { api, type Repository } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/query-keys";
+import { toast } from "@/components/ui/toast";
 
-export function ChatView({ repoId }: { repoId: string }) {
-  const repoQuery = useRepository(repoId);
+export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: string }) {
+  const queryClient = useQueryClient();
+  const [repoIdFromUrl, setRepoIdFromUrl] = useState<string | null>(null);
+  const [isCreatingRepo, setIsCreatingRepo] = useState(false);
+
+  // If we have an initial URL, we need to analyze it first
+  const effectiveRepoId = repoIdFromUrl ?? repoId;
+  const shouldFetchRepo = !initialUrl || !!repoIdFromUrl;
+
+  const repoQuery = useRepository(effectiveRepoId, { enabled: shouldFetchRepo });
   const isIndexing = repoQuery.data?.indexStatus === "INDEXING";
   const statusQuery = useIndexStatus(
-    repoId,
+    effectiveRepoId,
     isIndexing || repoQuery.data?.indexStatus === "PENDING"
   );
+
+  // Fire analyze request on mount if we have an initial URL
+  useEffect(() => {
+    if (initialUrl && !repoIdFromUrl) {
+      setIsCreatingRepo(true);
+      api.analyzeRepo(initialUrl)
+        .then(repo => {
+          // Update cache
+          queryClient.setQueryData<Repository[]>(queryKeys.repos.list(), (old) => {
+            if (!old) return [repo];
+            const exists = old.find(r => r.id === repo.id);
+            if (exists) return old;
+            return [...old, repo];
+          });
+          queryClient.invalidateQueries({ queryKey: queryKeys.repos.detail(repo.id) });
+          // Switch to use the real repo ID
+          setRepoIdFromUrl(repo.id);
+          toast.add({ title: "Repository found!", description: `Analyzing ${repo.fullName}...`, type: "success" });
+        })
+        .catch(error => {
+          toast.add({ title: "Failed to analyze repository", description: error instanceof Error ? error.message : "Unknown error", type: "error" });
+        })
+        .finally(() => {
+          setIsCreatingRepo(false);
+        });
+    }
+  }, [initialUrl, repoIdFromUrl, queryClient]);
 
   const indexStatus =
     statusQuery.data?.indexStatus ?? repoQuery.data?.indexStatus;
@@ -90,6 +129,49 @@ export function ChatView({ repoId }: { repoId: string }) {
           <Skeleton className="min-h-80 rounded-2xl" />
           <Skeleton className="min-h-80 rounded-2xl" />
         </div>
+      </AppShell>
+    );
+  }
+
+  // Stage 0: Creating repo - show overlay while background POST /api/analyze runs
+  if (isCreatingRepo || (initialUrl && !repoIdFromUrl)) {
+    const tempRepo = {
+      id: 'temp',
+      githubRepoId: 0,
+      owner: '',
+      name: '',
+      fullName: 'Repository',
+      isPrivate: false,
+      defaultBranch: 'main',
+      language: null,
+      htmlUrl: null,
+      description: null,
+      indexStatus: 'INDEXING' as const,
+      indexedAt: null,
+      chunkCount: 0,
+      filesTotal: 0,
+      filesProcessed: 0,
+      errorMessage: null,
+    };
+    const tempStatus = {
+      repositoryId: 'temp',
+      indexStatus: 'INDEXING' as const,
+      filesTotal: 0,
+      filesProcessed: 0,
+      chunkCount: 0,
+      chunksTotal: 0,
+      chunksProcessed: 0,
+      indexingStage: 'creating' as const,
+      indexingDetail: 'Creating repo row...',
+      indexedAt: null,
+      errorMessage: null,
+    };
+    return (
+      <AppShell title="Setting up repository…" description="Creating repo row and fetching GitHub metadata">
+        <IndexingState
+          repo={tempRepo}
+          status={tempStatus}
+        />
       </AppShell>
     );
   }

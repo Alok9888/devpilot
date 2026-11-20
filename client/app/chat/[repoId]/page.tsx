@@ -1,17 +1,17 @@
 "use client";
 
-import { use } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 
-import {ChatView}  from "@/components/chat/chat-view";
+import {ChatView} from "@/components/chat/chat-view";
 
-export default function ChatPage({
-  params,
-}: {
-  params: Promise<{ repoId: string }>;
-}) {
-  const { repoId } = use(params);
+export default function ChatPage() {
+  const params = useParams<{ repoId: string }>();
+  const slug = params?.repoId || '';
+  const searchParams = useSearchParams();
+  const urlParam = searchParams.get('url') ?? undefined;
 
+  // If we have a URL param, pass it to ChatView for background analysis
   return (
-    <ChatView repoId={repoId} />
+    <ChatView repoId={slug} initialUrl={urlParam} />
   );
 }

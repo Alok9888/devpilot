@@ -16,6 +16,7 @@ import { getRepoProgress, useStartIndexing } from "@/hooks/use-repos";
 import type { IndexStatusResponse, Repository } from "@/lib/api";
 
 const STAGES = [
+  { key: "creating", label: "Creating", icon: Loader2 },
   { key: "fetching", label: "Fetching", icon: Loader2 },
   { key: "chunking", label: "Chunking", icon: Loader2 },
   { key: "embedding", label: "Embedding", icon: Loader2 },
@@ -24,6 +25,11 @@ const STAGES = [
 ] as const;
 
 const SUBTEXTS: Record<string, string[]> = {
+  creating: [
+    "Creating repo row...",
+    "Fetching GitHub metadata...",
+    "Validating repository...",
+  ],
   fetching: [
     "Fetching repository files...",
     "Reading file list from GitHub...",
@@ -146,17 +152,20 @@ export function IndexingState({
   // Calculate progress based on current stage
   let progress = 0;
   switch (indexingStage) {
+    case "creating":
+      progress = 5;
+      break;
     case "fetching":
-      progress = filesTotal > 0 ? Math.round((filesProcessed / filesTotal) * 25) : 10;
+      progress = 5 + (filesTotal > 0 ? Math.round((filesProcessed / filesTotal) * 20) : 10);
       break;
     case "chunking":
-      progress = 25 + (chunksTotal > 0 ? Math.round((chunksProcessed / chunksTotal) * 25) : 10);
+      progress = 25 + (chunksTotal > 0 ? Math.round((chunksProcessed / chunksTotal) * 20) : 10);
       break;
     case "embedding":
-      progress = 50 + (chunksTotal > 0 ? Math.round((chunksProcessed / chunksTotal) * 35) : 15);
+      progress = 45 + (chunksTotal > 0 ? Math.round((chunksProcessed / chunksTotal) * 30) : 15);
       break;
     case "saving":
-      progress = 85;
+      progress = 75;
       break;
     case "done":
       progress = 100;

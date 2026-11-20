@@ -40,11 +40,11 @@ export function useRepos() {
   });
 }
 
-export function useRepository(repoId: string) {
+export function useRepository(repoId: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: queryKeys.repos.detail(repoId),
     queryFn: () => api.getRepo(repoId),
-    enabled: Boolean(repoId),
+    enabled: Boolean(repoId) && (options?.enabled ?? true),
     refetchInterval: (query) =>
       query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
   });
