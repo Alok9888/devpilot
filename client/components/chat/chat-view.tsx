@@ -17,7 +17,7 @@ import {
   useCreateChatSession,
   useStreamChat,
 } from "@/hooks/use-chat";
-import { useIndexStatus, useRepository } from "@/hooks/use-repos";
+import { useIndexStatus, useIndexStatusByUrl, useRepository } from "@/hooks/use-repos";
 import { api, type Repository } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
@@ -33,11 +33,16 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
   const shouldFetchRepo = !initialUrl || !!repoIdFromUrl;
 
   const repoQuery = useRepository(effectiveRepoId, { enabled: shouldFetchRepo });
-  const isIndexing = repoQuery.data?.indexStatus === "INDEXING";
-  const statusQuery = useIndexStatus(
+
+  // Use URL-based status polling when we have initialUrl but no repo ID yet
+  const urlStatusQuery = useIndexStatusByUrl(initialUrl ?? "", Boolean(initialUrl && !repoIdFromUrl));
+  const repoStatusQuery = useIndexStatus(
     effectiveRepoId,
-    isIndexing || repoQuery.data?.indexStatus === "PENDING"
+    Boolean((!initialUrl || repoIdFromUrl) && (repoQuery.data?.indexStatus === "INDEXING" || repoQuery.data?.indexStatus === "PENDING"))
   );
+
+  // Choose which status to use
+  const statusQuery = initialUrl && !repoIdFromUrl ? urlStatusQuery : repoStatusQuery;
 
   // Fire analyze request on mount if we have an initial URL
   useEffect(() => {

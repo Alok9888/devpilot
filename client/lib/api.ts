@@ -127,6 +127,8 @@ export const api = {
     apiFetch<Repository>(`/api/repos/${id}/index`, { method: "POST" }),
   indexStatus: (id: string) =>
     apiFetch<IndexStatusResponse>(`/api/repos/${id}/status`),
+  indexStatusByUrl: (url: string) =>
+    apiFetch<IndexStatusResponse>(`/api/repos/analyze/status?url=${encodeURIComponent(url)}`),
   createSession: (repositoryId: string, title?: string) =>
     apiFetch<ChatSession>("/api/chat/sessions", {
       method: "POST",

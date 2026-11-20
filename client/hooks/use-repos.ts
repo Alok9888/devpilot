@@ -60,6 +60,16 @@ export function useIndexStatus(repoId: string, enabled = false) {
   });
 }
 
+export function useIndexStatusByUrl(url: string, enabled = false) {
+  return useQuery({
+    queryKey: queryKeys.repos.statusByUrl(url),
+    queryFn: () => api.indexStatusByUrl(url),
+    enabled: Boolean(url) && enabled,
+    refetchInterval: (query) =>
+      query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
+  });
+}
+
 export function useStartIndexing() {
   const queryClient = useQueryClient();
 

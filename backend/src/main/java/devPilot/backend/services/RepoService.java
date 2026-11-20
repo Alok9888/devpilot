@@ -3,24 +3,29 @@ package devPilot.backend.services;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import devPilot.backend.dto.IndexStatusResponse;
 import devPilot.backend.dto.RepositoryResponse;
+import devPilot.backend.entity.IndexStatus;
 import devPilot.backend.entity.Repository;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.RepositoryRepository;
 import devPilot.backend.services.github.GithubApiClient;
-
+import devPilot.backend.services.indexing.IndexingService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class RepoService {
     private final RepositoryRepository repositoryRepository;
     private final GithubApiClient gitHubApiClient;
+    private final IndexingService indexingService;
 
     @Transactional
     public Repository analyzePublicRepo(UUID userId, String owner, String name) {
@@ -100,5 +105,78 @@ public class RepoService {
             return number.longValue();
         }
         return Long.parseLong(String.valueOf(value));
+    }
+
+    /**
+     * Background task: fetch GitHub metadata, create repo, start indexing
+     */
+    public void analyzeAndStartIndexing(UUID userId, String owner, String name) {
+        try {
+            var remote = gitHubApiClient.getRepository(owner, name);
+            Long githubRepoId = toLong(remote.get("id"));
+
+            Repository repo = repositoryRepository.findByUserIdAndGithubRepoId(userId, githubRepoId)
+                    .orElseGet(Repository::new);
+            repo.setUserId(userId);
+            repo.setGithubRepoId(githubRepoId);
+            repo.setOwner(owner);
+            repo.setName(name);
+            repo.setFullName(String.valueOf(remote.get("full_name")));
+            repo.setPrivate(Boolean.TRUE.equals(remote.get("private")));
+            repo.setDefaultBranch(remote.get("default_branch") != null
+                    ? String.valueOf(remote.get("default_branch")) : "main");
+            repo.setLanguage(remote.get("language") != null ? String.valueOf(remote.get("language")) : null);
+            repo.setHtmlUrl(remote.get("html_url") != null ? String.valueOf(remote.get("html_url")) : null);
+            repo.setDescription(remote.get("description") != null ? String.valueOf(remote.get("description")) : null);
+            repo.setUpdatedAt(Instant.now());
+            repo.setIndexStatus(IndexStatus.INDEXING);
+            repo.setIndexingStage("fetching");
+            repo.setIndexingDetail("Fetching file list...");
+            repo.setFilesTotal(0);
+            repo.setFilesProcessed(0);
+            repo.setChunkCount(0);
+            repo.setChunksTotal(0);
+            repo.setChunksProcessed(0);
+
+            repo = repositoryRepository.save(repo);
+
+            // Start indexing async
+            indexingService.startIndexing(repo.getId(), userId);
+            indexingService.indexAsync(repo.getId(), userId);
+        } catch (Exception e) {
+            log.error("Background analyze failed for {}/{}: {}", owner, name, e.getMessage(), e);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public IndexStatusResponse statusByOwnerName(UUID userId, String owner, String name) {
+        var remote = gitHubApiClient.getRepository(owner, name);
+        Long githubRepoId = toLong(remote.get("id"));
+        Repository repo = repositoryRepository.findByUserIdAndGithubRepoId(userId, githubRepoId)
+                .orElse(null);
+        if (repo == null) {
+            // Repo not yet created in DB - return creating status
+            return new IndexStatusResponse(
+                    null,
+                    IndexStatus.INDEXING,
+                    0, 0, 0, 0, 0,
+                    "creating",
+                    "Creating repo row...",
+                    null,
+                    null
+            );
+        }
+        return new IndexStatusResponse(
+                repo.getId(),
+                repo.getIndexStatus(),
+                repo.getFilesTotal(),
+                repo.getFilesProcessed(),
+                repo.getChunkCount(),
+                repo.getChunksTotal(),
+                repo.getChunksProcessed(),
+                repo.getIndexingStage(),
+                repo.getIndexingDetail(),
+                repo.getIndexedAt(),
+                repo.getErrorMessage());
     }
 }
