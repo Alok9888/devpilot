@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { GitBranch, Loader2 } from "lucide-react";
+import { GitBranch, ArrowRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -23,7 +23,6 @@ export function AddRepoDialog({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [repoUrl, setRepoUrl] = useState("");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const extractGitHubOwnerName = (url: string): { owner: string; name: string } | null => {
     try {
@@ -48,7 +47,6 @@ export function AddRepoDialog({
       return;
     }
 
-    setIsAnalyzing(true);
     try {
       const repo = await api.analyzeRepo(repoUrl);
 
@@ -67,11 +65,11 @@ export function AddRepoDialog({
 
       toast.add({
         title: "Repository added!",
-        description: `Analyzing ${repo.fullName}...`,
-        type: "loading",
+        description: `Opening ${repo.fullName}...`,
+        type: "success",
       });
 
-      // Navigate to chat page
+      // Navigate to chat page immediately
       router.push(`/chat/${repo.id}`);
     } catch (error) {
       toast.add({
@@ -79,14 +77,12 @@ export function AddRepoDialog({
         description: error instanceof Error ? error.message : "Unknown error",
         type: "error",
       });
-    } finally {
-      setIsAnalyzing(false);
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (isAnalyzing) return;
+    if (!repoUrl.trim()) return;
     handleAnalyze();
   };
 
@@ -123,15 +119,9 @@ export function AddRepoDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleAnalyze} disabled={isAnalyzing || !repoUrl.trim()}>
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                "Analyze"
-              )}
+            <Button onClick={handleAnalyze} disabled={!repoUrl.trim()}>
+              <ArrowRight className="mr-2 h-4 w-4" />
+              Analyze
             </Button>
           </DialogFooter>
         </form>

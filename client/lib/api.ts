@@ -25,6 +25,10 @@ export type IndexStatusResponse = {
   filesTotal: number;
   filesProcessed: number;
   chunkCount: number;
+  chunksTotal: number;
+  chunksProcessed: number;
+  indexingStage: "fetching" | "chunking" | "embedding" | "saving" | "done" | null;
+  indexingDetail: string | null;
   indexedAt: string | null;
   errorMessage: string | null;
 };

@@ -11,6 +11,10 @@ public record IndexStatusResponse(
         int filesTotal,
         int filesProcessed,
         int chunkCount,
+        int chunksTotal,
+        int chunksProcessed,
+        String indexingStage,
+        String indexingDetail,
         Instant indexedAt,
         String errorMessage) {
 }

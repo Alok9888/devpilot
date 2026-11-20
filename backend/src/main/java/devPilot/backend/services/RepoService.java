@@ -67,6 +67,10 @@ public class RepoService {
                 repo.getFilesTotal(),
                 repo.getFilesProcessed(),
                 repo.getChunkCount(),
+                repo.getChunksTotal(),
+                repo.getChunksProcessed(),
+                repo.getIndexingStage(),
+                repo.getIndexingDetail(),
                 repo.getIndexedAt(),
                 repo.getErrorMessage());
     }

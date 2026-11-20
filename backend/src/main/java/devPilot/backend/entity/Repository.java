@@ -84,6 +84,20 @@ public class Repository {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    @Column(name = "indexing_stage", length = 20)
+    private String indexingStage; // fetching, chunking, embedding, saving
+
+    @Column(name = "indexing_detail", columnDefinition = "TEXT")
+    private String indexingDetail; // current file/detail being processed
+
+    @Column(name = "chunks_total", nullable = false)
+    @Builder.Default
+    private int chunksTotal = 0;
+
+    @Column(name = "chunks_processed", nullable = false)
+    @Builder.Default
+    private int chunksProcessed = 0;
+
     @Column(name = "tree_sha")
     private String treeSha;
 

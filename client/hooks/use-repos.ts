@@ -8,7 +8,7 @@ import { toast } from "@/components/ui/toast";
 
 
 
-const INDEXING_POLL_MS = 2000;
+const INDEXING_POLL_MS = 500; // Poll every 500ms for live stage updates
 
 function hasIndexingRepos(repos: Repository[] | undefined) {
   return repos?.some((repo) => repo.indexStatus === "INDEXING") ?? false;
@@ -56,7 +56,7 @@ export function useIndexStatus(repoId: string, enabled = false) {
     queryFn: () => api.indexStatus(repoId),
     enabled: Boolean(repoId) && enabled,
     refetchInterval: (query) =>
-      query.state.data?.indexStatus === "INDEXING" ? 1500 : false,
+      query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
   });
 }
 

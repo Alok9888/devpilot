@@ -60,6 +60,24 @@ public class IndexingService {
 
     private boolean embeddingFailed = false;
 
+    // Helper to update repo indexing status with stage and detail
+    private void updateIndexingStatus(UUID repoId, String stage, String detail, int filesDone, int filesTotal, int chunksDone, int chunksTotal) {
+        try {
+            repositoryRepository.findById(repoId).ifPresent(repo -> {
+                repo.setIndexingStage(stage);
+                repo.setIndexingDetail(detail);
+                if (filesDone >= 0) repo.setFilesProcessed(filesDone);
+                if (filesTotal >= 0) repo.setFilesTotal(filesTotal);
+                if (chunksDone >= 0) repo.setChunksProcessed(chunksDone);
+                if (chunksTotal >= 0) repo.setChunksTotal(chunksTotal);
+                repo.setUpdatedAt(Instant.now());
+                repositoryRepository.save(repo);
+            });
+        } catch (Exception e) {
+            log.warn("Failed to update indexing status: {}", e.getMessage());
+        }
+    }
+
     public Repository startIndexing(UUID repoId, UUID userId) {
         Repository repo = repositoryRepository.findByIdAndUserId(repoId, userId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
@@ -72,6 +90,10 @@ public class IndexingService {
         repo.setFilesProcessed(0);
         repo.setFilesTotal(0);
         repo.setChunkCount(0);
+        repo.setChunksTotal(0);
+        repo.setChunksProcessed(0);
+        repo.setIndexingStage("fetching");
+        repo.setIndexingDetail("Starting...");
         repo.setErrorMessage(null);
         repo.setUpdatedAt(Instant.now());
         return repositoryRepository.save(repo);
@@ -130,19 +152,26 @@ public class IndexingService {
             result.removedFiles.size(),
             result.unchangedFiles.size());
 
+        // Update status: fetching stage
+        updateIndexingStatus(repoId, "fetching", "Fetching file list...", 0, result.allFiles.size(), 0, 0);
+
         // Delete vectors for removed files only
         deleteVectorsForRemovedFiles(userId, repoId.toString(), result.removedFiles);
 
         // Fetch and process changed/new files in parallel
         long fetchStart = System.currentTimeMillis();
         List<Document> allChunks = fetchAndProcessFiles(
-            repo, userId, repoId, result.newFiles, result.changedFiles);
+            repo, userId, repoId, result.newFiles, result.changedFiles, result.allFiles.size());
         long fetchDuration = System.currentTimeMillis() - fetchStart;
 
         int totalChunks = allChunks.size();
 
+        // Update status: chunking stage
+        updateIndexingStatus(repoId, "chunking", "Splitting files into chunks...",
+            result.allFiles.size(), result.allFiles.size(), totalChunks, totalChunks);
+
         // Store all chunks
-        storeChunks(allChunks, repoId);
+        storeChunks(allChunks, repoId, repoId);
 
         // If embedding failed, mark the repository as failed instead of ready
         if (embeddingFailed) {
@@ -152,6 +181,10 @@ public class IndexingService {
         }
 
         int skippedCount = result.unchangedFiles.size();
+
+        // Update status: done
+        updateIndexingStatus(repoId, "done", "Indexing complete",
+            result.allFiles.size(), result.allFiles.size(), totalChunks, totalChunks);
 
         // Update repo with new tree SHA and indexed files
         repo.setTreeSha(currentTreeSha);
@@ -163,8 +196,12 @@ public class IndexingService {
         repo.setFilesTotal(result.allFiles.size());
         repo.setFilesProcessed(result.allFiles.size());
         repo.setChunkCount(totalChunks);
+        repo.setChunksTotal(totalChunks);
+        repo.setChunksProcessed(totalChunks);
         repo.setIndexedAt(Instant.now());
         repo.setIndexStatus(IndexStatus.READY);
+        repo.setIndexingStage(null);
+        repo.setIndexingDetail(null);
         repositoryRepository.save(repo);
 
         long duration = System.currentTimeMillis() - startTime;
@@ -252,7 +289,7 @@ public class IndexingService {
     @SuppressWarnings("unchecked")
     private List<Document> fetchAndProcessFiles(
             Repository repo, UUID userId, UUID repoId,
-            List<String> newFiles, List<String> changedFiles) {
+            List<String> newFiles, List<String> changedFiles, int totalFiles) {
 
         embeddingFailed = false;  // Reset flag for each indexing run
 
@@ -271,6 +308,10 @@ public class IndexingService {
                 try {
                     semaphore.acquire();
                     rateLimiter.pause();
+
+                    // Update detail for current file being fetched
+                    updateIndexingStatus(repoId, "fetching", "Fetching " + path + "...",
+                        filesToFetch.indexOf(path), totalFiles, 0, 0);
 
                     String content = gitHubApiClient.getFileContent(
                         repo.getOwner(), repo.getName(), path);
@@ -293,12 +334,17 @@ public class IndexingService {
 
         // Wait for all to complete with overall timeout
         List<Document> allChunks = new ArrayList<>();
+        int filesCompleted = 0;
         for (CompletableFuture<FileResult> future : futures) {
             try {
                 FileResult result = future.get(RETRIEVAL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                filesCompleted++;
                 if (result.chunks != null) {
                     allChunks.addAll(result.chunks);
                 }
+                // Update progress
+                updateIndexingStatus(repoId, "fetching", "Fetching complete",
+                    filesCompleted, totalFiles, allChunks.size(), 0);
             } catch (TimeoutException e) {
                 log.warn("Timeout processing files, continuing with partial results");
             } catch (Exception e) {
@@ -343,19 +389,35 @@ public class IndexingService {
         }
     }
 
-    private void storeChunks(List<Document> chunks, UUID repoId) {
+    private void storeChunks(List<Document> chunks, UUID repoId, UUID repoIdForStatus) {
         int batchSize = VECTOR_BATCH_SIZE;
+        int totalChunks = chunks.size();
+
         for (int i = 0; i < chunks.size(); i += batchSize) {
             int start = i;
             int end = Math.min(i + batchSize, chunks.size());
             List<Document> batch = chunks.subList(i, end);
 
+            // Update embedding progress
+            updateIndexingStatus(repoIdForStatus, "embedding",
+                "Embedding batch " + start + "-" + end + " of " + totalChunks + "...",
+                -1, -1, start, totalChunks);
+
             boolean success = addBatchWithRetry(batch, repoId, start, end);
             if (!success) {
                 log.error("Failed to store batch {}-{} for repo {} - embeddingFailed flag set", start, end, repoId);
                 embeddingFailed = true;
+            } else {
+                // Update chunks processed
+                updateIndexingStatus(repoIdForStatus, "embedding",
+                    "Embedded batch " + start + "-" + end + " of " + totalChunks,
+                    -1, -1, end, totalChunks);
             }
         }
+
+        // Update status: saving stage
+        updateIndexingStatus(repoIdForStatus, "saving", "Saving vectors to database...",
+            -1, -1, totalChunks, totalChunks);
     }
 
     private boolean addBatchWithRetry(List<Document> batch, UUID repoId, int start, int end) {
