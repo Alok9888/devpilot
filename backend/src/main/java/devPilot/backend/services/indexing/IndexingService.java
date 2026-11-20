@@ -182,10 +182,6 @@ public class IndexingService {
 
         int skippedCount = result.unchangedFiles.size();
 
-        // Update status: done
-        updateIndexingStatus(repoId, "done", "Indexing complete",
-            result.allFiles.size(), result.allFiles.size(), totalChunks, totalChunks);
-
         // Update repo with new tree SHA and indexed files
         repo.setTreeSha(currentTreeSha);
         try {
@@ -200,9 +196,23 @@ public class IndexingService {
         repo.setChunksProcessed(totalChunks);
         repo.setIndexedAt(Instant.now());
         repo.setIndexStatus(IndexStatus.READY);
-        repo.setIndexingStage(null);
-        repo.setIndexingDetail(null);
-        repositoryRepository.save(repo);
+        repo.setIndexingStage("done");
+        repo.setIndexingDetail("Indexing complete");
+        repo.setUpdatedAt(Instant.now());
+
+        try {
+            repositoryRepository.save(repo);
+            log.info("{} [INDEX] marked READY repoId={}", Instant.now(), repoId);
+        } catch (Exception e) {
+            log.error("{} [INDEX] FAILED to persist READY status repoId={}: {}", Instant.now(), repoId, e.getMessage(), e);
+            // Mark as failed so frontend knows
+            repo.setIndexStatus(IndexStatus.FAILED);
+            repo.setErrorMessage("Failed to persist indexing completion: " + e.getMessage());
+            repo.setIndexingStage("failed");
+            repo.setIndexingDetail("Database error: " + e.getMessage());
+            repositoryRepository.save(repo);
+            throw e;
+        }
 
         long duration = System.currentTimeMillis() - startTime;
         log.info("{} [INDEX] complete repoId={} total={} fetched={} skipped={} chunks={} fetch={}ms time={}ms",
