@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, FolderGit2, MessageSquareCode, Sparkles } from "lucide-react";
 
@@ -13,17 +13,25 @@ import { api } from "@/lib/api";
 export default function HomePage() {
   const [repoUrl, setRepoUrl] = useState("");
   const [error, setError] = useState("");
+  const [isClicked, setIsClicked] = useState(false);
+  const hasClickedRef = useRef(false);
   const router = useRouter();
 
   function analyze() {
+    if (hasClickedRef.current) return;
+
     setError("");
     const match = repoUrl.trim().match(/github\.com\/([^/]+)\/([^/?#]+)/i);
     if (!match) {
+      hasClickedRef.current = false;
+      setIsClicked(false);
       setError("Enter a valid GitHub repository URL");
       return;
     }
 
     const slug = `${match[1]}-${match[2].replace(/\.git$/, "")}`.toLowerCase();
+    hasClickedRef.current = true;
+    setIsClicked(true);
     router.push(`/chat/${slug}?url=${encodeURIComponent(repoUrl.trim())}`);
     void api.analyzeRepo(repoUrl.trim()).catch((err) => {
       setError(err instanceof Error ? err.message : "Could not analyze repository");
@@ -61,10 +69,17 @@ export default function HomePage() {
               aria-label="GitHub repository URL"
               className="h-11 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <Button size="lg" onClick={analyze} disabled={!repoUrl.trim()}>
+            <Button
+              size="lg"
+              onClick={analyze}
+              disabled={!repoUrl.trim()}
+              className={isClicked
+                ? "scale-[0.97] cursor-not-allowed border-primary/70 bg-primary/90 opacity-60 pointer-events-none transition-all duration-150"
+                : "transition-all duration-150 active:scale-95"}
+            >
               <FolderGit2 className="size-4" />
               Analyze
-              <ArrowRight className="size-4" />
+              <ArrowRight className={`size-4 transition-transform duration-150 ${isClicked ? "translate-x-1" : ""}`} />
             </Button>
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
