@@ -46,9 +46,13 @@ public class RepoController {
         }
         UUID workspaceId = workspaceContext.getWorkspaceId();
         Repository repo = repoService.analyzePublicRepo(workspaceId, matcher.group(1), matcher.group(2));
+
+        // If repo needs indexing (not READY or INDEXING), start it asynchronously
+        // This returns immediately so frontend can navigate to chat page
         if (repo.getIndexStatus() != devPilot.backend.entity.IndexStatus.READY
                 && repo.getIndexStatus() != devPilot.backend.entity.IndexStatus.INDEXING) {
-            repo = indexingService.startIndexing(repo.getId(), workspaceId);
+            // Start indexing in background - non-blocking
+            indexingService.startIndexing(repo.getId(), workspaceId);
             indexingService.indexAsync(repo.getId(), workspaceId);
         }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
