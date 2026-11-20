@@ -1,16 +1,15 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
-import {ChatView} from "@/components/chat/chat-view";
+import { ChatView } from "@/components/chat/chat-view";
 
 export default function ChatPage() {
-  const params = useParams<{ repoId: string }>();
-  const slug = params?.repoId || '';
   const searchParams = useSearchParams();
   const urlParam = searchParams.get('url') ?? undefined;
+  const slug = ''; // We use url param, not repoId from URL
 
-  // If we have a URL param, pass it to ChatView for background analysis
+  // Pass URL param for background analysis - ChatView will poll by URL
   return (
     <ChatView repoId={slug} initialUrl={urlParam} />
   );

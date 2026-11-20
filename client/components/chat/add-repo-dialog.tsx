@@ -47,8 +47,8 @@ export function AddRepoDialog({
       return;
     }
 
-    // Create slug from owner/name for immediate navigation
-    const slug = `${parsed.owner}/${parsed.name}`.toLowerCase();
+    // Create slug from owner-name (hyphen, not slash) for immediate navigation
+    const slug = `${parsed.owner}-${parsed.name}`.toLowerCase();
 
     // Navigate to chat page IMMEDIATELY - no await
     router.push(`/chat/${slug}?url=${encodeURIComponent(repoUrl)}`);
