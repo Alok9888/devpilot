@@ -5,15 +5,14 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import devPilot.backend.services.embedding.CloudflareEmbeddingService;
 
 @Configuration
 public class EmbeddingConfig {
     @Bean
-    EmbeddingModel cloudflareEmbeddingService(Environment env, JdbcTemplate jdbcOperations) {
-        return new CloudflareEmbeddingService(env, jdbcOperations);
+    EmbeddingModel cloudflareEmbeddingService(JdbcTemplate jdbcOperations) {
+        return new CloudflareEmbeddingService(jdbcOperations);
     }
 
     @Bean
