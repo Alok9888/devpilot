@@ -18,65 +18,39 @@ import {
   useStreamChat,
 } from "@/hooks/use-chat";
 import { useIndexStatus, useIndexStatusByUrl, useRepository } from "@/hooks/use-repos";
-import { api, type Repository } from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "@/lib/query-keys";
-import { toast } from "@/components/ui/toast";
 
 export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: string }) {
-  const queryClient = useQueryClient();
-  const [repoIdFromUrl, setRepoIdFromUrl] = useState<string | null>(null);
-  const [isCreatingRepo, setIsCreatingRepo] = useState(false);
+  const [resolvedRepoId, setResolvedRepoId] = useState<string | null>(null);
 
-  // If we have an initial URL, we need to analyze it first
-  const effectiveRepoId = repoIdFromUrl ?? repoId;
-  const shouldFetchRepo = !initialUrl || !!repoIdFromUrl;
+  const routeRepoId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(repoId)
+    ? repoId
+    : null;
+  const effectiveRepoId = resolvedRepoId ?? routeRepoId ?? "";
+  const shouldFetchRepo = Boolean(effectiveRepoId);
 
   const repoQuery = useRepository(effectiveRepoId, { enabled: shouldFetchRepo });
 
   // Use URL-based status polling when we have initialUrl but no repo ID yet
-  const urlStatusQuery = useIndexStatusByUrl(initialUrl ?? "", Boolean(initialUrl && !repoIdFromUrl));
+  const urlStatusQuery = useIndexStatusByUrl(initialUrl ?? "", Boolean(initialUrl && !effectiveRepoId));
   const repoStatusQuery = useIndexStatus(
     effectiveRepoId,
-    Boolean((!initialUrl || repoIdFromUrl) && (repoQuery.data?.indexStatus === "INDEXING" || repoQuery.data?.indexStatus === "PENDING"))
+    Boolean(effectiveRepoId && (repoQuery.data?.indexStatus === "INDEXING" || repoQuery.data?.indexStatus === "PENDING"))
   );
 
   // Choose which status to use
-  const statusQuery = initialUrl && !repoIdFromUrl ? urlStatusQuery : repoStatusQuery;
-
-  // Fire analyze request on mount if we have an initial URL
+  const statusQuery = initialUrl && !effectiveRepoId ? urlStatusQuery : repoStatusQuery;
   useEffect(() => {
-    if (initialUrl && !repoIdFromUrl) {
-      setIsCreatingRepo(true);
-      api.analyzeRepo(initialUrl)
-        .then(repo => {
-          // Update cache
-          queryClient.setQueryData<Repository[]>(queryKeys.repos.list(), (old) => {
-            if (!old) return [repo];
-            const exists = old.find(r => r.id === repo.id);
-            if (exists) return old;
-            return [...old, repo];
-          });
-          queryClient.invalidateQueries({ queryKey: queryKeys.repos.detail(repo.id) });
-          // Switch to use the real repo ID
-          setRepoIdFromUrl(repo.id);
-          toast.add({ title: "Repository found!", description: `Analyzing ${repo.fullName}...`, type: "success" });
-        })
-        .catch(error => {
-          toast.add({ title: "Failed to analyze repository", description: error instanceof Error ? error.message : "Unknown error", type: "error" });
-        })
-        .finally(() => {
-          setIsCreatingRepo(false);
-        });
+    if (urlStatusQuery.data?.repositoryId) {
+      setResolvedRepoId(urlStatusQuery.data.repositoryId);
     }
-  }, [initialUrl, repoIdFromUrl, queryClient]);
+  }, [urlStatusQuery.data?.repositoryId]);
 
   const indexStatus =
     statusQuery.data?.indexStatus ?? repoQuery.data?.indexStatus;
   const ready = indexStatus === "READY";
 
-  const sessionsQuery = useChatSessions(repoId, ready);
-  const createSession = useCreateChatSession(repoId);
+  const sessionsQuery = useChatSessions(effectiveRepoId, ready);
+  const createSession = useCreateChatSession(effectiveRepoId);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
     null
   );
@@ -129,31 +103,30 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
 
   // Calculate values based on stage for proper progress
   const urlStatus = statusQuery.data;
-  const isLoading = repoQuery.isLoading || (!initialUrl && !repoIdFromUrl && !urlStatus);
 
   // Calculate files/total for progress based on source
-  const filesTotal = (initialUrl && !repoIdFromUrl) ?
+  const filesTotal = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.filesTotal ?? 0) :
     (repoQuery.data?.filesTotal ?? 0);
-  const filesProcessed = (initialUrl && !repoIdFromUrl) ?
+  const filesProcessed = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.filesProcessed ?? 0) :
     (repoQuery.data?.filesProcessed ?? 0);
-  const chunksTotal = (initialUrl && !repoIdFromUrl) ?
+  const chunksTotal = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.chunksTotal ?? 0) :
     (repoQuery.data?.chunkCount ?? 0);
-  const chunksProcessed = (initialUrl && !repoIdFromUrl) ?
+  const chunksProcessed = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.chunksProcessed ?? 0) :
     0;
-  const currentStage: 'creating' | 'fetching' | 'chunking' | 'embedding' | 'saving' | 'done' | null = (initialUrl && !repoIdFromUrl) ?
+  const currentStage: 'creating' | 'fetching' | 'chunking' | 'embedding' | 'saving' | 'done' | null = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.indexingStage ?? 'creating') :
     (repoQuery.data?.indexStatus === 'INDEXING' ? 'fetching' : null);
-  const indexingDetail = (initialUrl && !repoIdFromUrl) ?
+  const indexingDetail = (initialUrl && !effectiveRepoId) ?
     (urlStatus?.indexingDetail ?? 'Creating repo row...') :
     null;
 
   // CRITICAL: Show creating/fetching/chunking overlay IMMEDIATELY when URL exists but no repo ID yet
   // This MUST come before the loading check to prevent "Loading chat..." being shown
-  if (initialUrl && !repoIdFromUrl) {
+  if (initialUrl && !effectiveRepoId) {
     const tempStatus = {
       repositoryId: 'temp',
       indexStatus: 'INDEXING' as const,

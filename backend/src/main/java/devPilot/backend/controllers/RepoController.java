@@ -53,25 +53,17 @@ public class RepoController {
         String owner = matcher.group(1);
         String name = matcher.group(2);
 
-        // Return IMMEDIATELY with minimal repo - GitHub metadata fetch happens in background
-        CompletableFuture.runAsync(() -> {
-            try {
-                repoService.analyzeAndStartIndexing(workspaceId, owner, name);
-            } catch (Exception e) {
-                log.error("Background analyze failed for {}/{}: {}", owner, name, e.getMessage(), e);
-            }
-        });
-
-        // Return a temporary repo response for immediate feedback
-        Repository tempRepo = new Repository();
-        tempRepo.setOwner(owner);
-        tempRepo.setName(name);
-        tempRepo.setFullName(owner + "/" + name);
-        tempRepo.setIndexStatus(devPilot.backend.entity.IndexStatus.INDEXING);
-        tempRepo.setIndexingStage("creating");
-        tempRepo.setIndexingDetail("Creating repo row...");
-
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(tempRepo));
+        Repository repo = repoService.createOrGetCreatingRepository(workspaceId, owner, name);
+        if ("creating".equals(repo.getIndexingStage())) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    repoService.analyzeAndStartIndexing(workspaceId, owner, name);
+                } catch (Exception e) {
+                    log.error("Background analyze failed for {}/{}: {}", owner, name, e.getMessage(), e);
+                }
+            });
+        }
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
     }
 
     @GetMapping("/analyze/status")

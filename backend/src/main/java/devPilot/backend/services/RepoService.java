@@ -1,6 +1,7 @@
 package devPilot.backend.services;
 
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -107,6 +108,36 @@ public class RepoService {
         return Long.parseLong(String.valueOf(value));
     }
 
+    @Transactional
+    public Repository createOrGetCreatingRepository(UUID userId, String owner, String name) {
+        Repository existing = repositoryRepository.findByUserIdOrderByFullNameAsc(userId).stream()
+                .filter(repo -> repo.getOwner().equalsIgnoreCase(owner)
+                        && repo.getName().equalsIgnoreCase(name))
+                .findFirst()
+                .orElse(null);
+        if (existing != null) {
+            return existing;
+        }
+
+        Repository repo = new Repository();
+        repo.setUserId(userId);
+        repo.setGithubRepoId(placeholderGithubId(owner, name));
+        repo.setOwner(owner);
+        repo.setName(name);
+        repo.setFullName(owner + "/" + name);
+        repo.setDefaultBranch("main");
+        repo.setIndexStatus(IndexStatus.INDEXING);
+        repo.setIndexingStage("creating");
+        repo.setIndexingDetail("Creating repo row...");
+        return repositoryRepository.save(repo);
+    }
+
+    private static long placeholderGithubId(String owner, String name) {
+        UUID key = UUID.nameUUIDFromBytes(
+                (owner.toLowerCase() + "/" + name.toLowerCase()).getBytes(StandardCharsets.UTF_8));
+        return key.getMostSignificantBits() | Long.MIN_VALUE;
+    }
+
     /**
      * Background task: fetch GitHub metadata, create repo, start indexing
      */
@@ -116,7 +147,9 @@ public class RepoService {
             Long githubRepoId = toLong(remote.get("id"));
 
             Repository repo = repositoryRepository.findByUserIdAndGithubRepoId(userId, githubRepoId)
-                    .orElseGet(Repository::new);
+                    .orElseGet(() -> repositoryRepository
+                            .findByUserIdAndGithubRepoId(userId, placeholderGithubId(owner, name))
+                            .orElseGet(Repository::new));
             repo.setUserId(userId);
             repo.setGithubRepoId(githubRepoId);
             repo.setOwner(owner);
@@ -150,12 +183,14 @@ public class RepoService {
 
     @Transactional(readOnly = true)
     public IndexStatusResponse statusByOwnerName(UUID userId, String owner, String name) {
-        var remote = gitHubApiClient.getRepository(owner, name);
-        Long githubRepoId = toLong(remote.get("id"));
-        Repository repo = repositoryRepository.findByUserIdAndGithubRepoId(userId, githubRepoId)
-                .orElse(null);
+        Repository repo = repositoryRepository
+                .findByUserIdAndGithubRepoId(userId, placeholderGithubId(owner, name))
+                .orElseGet(() -> repositoryRepository.findByUserIdOrderByFullNameAsc(userId).stream()
+                        .filter(candidate -> candidate.getOwner().equalsIgnoreCase(owner)
+                                && candidate.getName().equalsIgnoreCase(name))
+                        .findFirst()
+                        .orElse(null));
         if (repo == null) {
-            // Repo not yet created in DB - return creating status
             return new IndexStatusResponse(
                     null,
                     IndexStatus.INDEXING,
@@ -165,6 +200,11 @@ public class RepoService {
                     null,
                     null
             );
+        }
+        if ("creating".equals(repo.getIndexingStage())) {
+            return new IndexStatusResponse(
+                    null, IndexStatus.INDEXING, 0, 0, 0, 0, 0,
+                    "creating", "Creating repo row...", null, null);
         }
         return new IndexStatusResponse(
                 repo.getId(),

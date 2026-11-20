@@ -13,20 +13,21 @@ import { api } from "@/lib/api";
 export default function HomePage() {
   const [repoUrl, setRepoUrl] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  async function analyze() {
+  function analyze() {
     setError("");
-    setLoading(true);
-    try {
-      const repo = await api.analyzeRepo(repoUrl);
-      router.push(`/chat/${repo.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not analyze repository");
-    } finally {
-      setLoading(false);
+    const match = repoUrl.trim().match(/github\.com\/([^/]+)\/([^/?#]+)/i);
+    if (!match) {
+      setError("Enter a valid GitHub repository URL");
+      return;
     }
+
+    const slug = `${match[1]}-${match[2].replace(/\.git$/, "")}`.toLowerCase();
+    router.push(`/chat/${slug}?url=${encodeURIComponent(repoUrl.trim())}`);
+    void api.analyzeRepo(repoUrl.trim()).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not analyze repository");
+    });
   }
 
   return (
@@ -55,14 +56,14 @@ export default function HomePage() {
             <input
               value={repoUrl}
               onChange={(event) => setRepoUrl(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") void analyze(); }}
+              onKeyDown={(event) => { if (event.key === "Enter") analyze(); }}
               placeholder="https://github.com/facebook/react"
               aria-label="GitHub repository URL"
               className="h-11 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <Button size="lg" onClick={() => void analyze()} disabled={!repoUrl.trim() || loading}>
+            <Button size="lg" onClick={analyze} disabled={!repoUrl.trim()}>
               <FolderGit2 className="size-4" />
-              {loading ? "Starting…" : "Analyze"}
+              Analyze
               <ArrowRight className="size-4" />
             </Button>
           </div>
