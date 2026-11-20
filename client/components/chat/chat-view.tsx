@@ -127,83 +127,9 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
     createSession,
   ]);
 
-  if (repoQuery.isLoading) {
-    return (
-      <AppShell title="Loading chat…">
-        <div className="grid flex-1 gap-4 p-4 md:grid-cols-[18rem_1fr]">
-          <Skeleton className="min-h-80 rounded-2xl" />
-          <Skeleton className="min-h-80 rounded-2xl" />
-        </div>
-      </AppShell>
-    );
-  }
-
-  // Stage 0: Creating repo - show overlay while background POST /api/analyze runs
-  // OR if we have initialUrl but no repoIdFromUrl yet
-  if (initialUrl && !repoIdFromUrl) {
-    const tempRepo = {
-      id: 'temp',
-      githubRepoId: 0,
-      owner: '',
-      name: '',
-      fullName: 'Repository',
-      isPrivate: false,
-      defaultBranch: 'main',
-      language: null,
-      htmlUrl: null,
-      description: null,
-      indexStatus: 'INDEXING' as const,
-      indexedAt: null,
-      chunkCount: 0,
-      filesTotal: 0,
-      filesProcessed: 0,
-      errorMessage: null,
-    };
-    const tempStatus = {
-      repositoryId: 'temp',
-      indexStatus: 'INDEXING' as const,
-      filesTotal: 0,
-      filesProcessed: 0,
-      chunkCount: 0,
-      chunksTotal: 0,
-      chunksProcessed: 0,
-      indexingStage: 'creating' as const,
-      indexingDetail: 'Creating repo row...',
-      indexedAt: null,
-      errorMessage: null,
-    };
-    return (
-      <AppShell title="Setting up repository…" description="Creating repo row and fetching GitHub metadata">
-        <IndexingState
-          repo={tempRepo}
-          status={tempStatus}
-        />
-      </AppShell>
-    );
-  }
-
-  // Show error only if we have a real repo query error (not while creating)
-  if (repoQuery.isError && !isCreatingRepo && !initialUrl) {
-    return (
-      <AppShell title="Repository unavailable">
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
-          <p className="text-sm text-muted-foreground">
-            {(repoQuery.error as Error)?.message ?? "Repository not found"}
-          </p>
-          <Button render={<Link href="/dashboard" />}>Back to dashboard</Button>
-        </div>
-      </AppShell>
-    );
-  }
-
-  const repo = repoQuery.data;
-
-  // Determine if we're in the "creating" stage
-  // Use urlStatusQuery data directly - check stage, not isCreatingRepo boolean (race condition with .finally)
+  // Calculate values based on stage for proper progress
   const urlStatus = statusQuery.data;
-  const currentStage: string = (initialUrl && !repoIdFromUrl) ?
-    (urlStatus?.indexingStage ?? 'creating') :
-    (repoQuery.data?.indexStatus === 'INDEXING' ? 'fetching' : 'creating');
+  const isLoading = repoQuery.isLoading || (!initialUrl && !repoIdFromUrl && !urlStatus);
 
   // Calculate files/total for progress based on source
   const filesTotal = (initialUrl && !repoIdFromUrl) ?
@@ -218,16 +144,16 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
   const chunksProcessed = (initialUrl && !repoIdFromUrl) ?
     (urlStatus?.chunksProcessed ?? 0) :
     0;
+  const currentStage: 'creating' | 'fetching' | 'chunking' | 'embedding' | 'saving' | 'done' | null = (initialUrl && !repoIdFromUrl) ?
+    (urlStatus?.indexingStage ?? 'creating') :
+    (repoQuery.data?.indexStatus === 'INDEXING' ? 'fetching' : null);
   const indexingDetail = (initialUrl && !repoIdFromUrl) ?
     (urlStatus?.indexingDetail ?? 'Creating repo row...') :
     null;
 
-  // Stage 0/1/2: Show creating/fetching/chunking overlay IMMEDIATELY when URL exists but no repo ID yet
-  // NEVER return null - always show overlay in this branch
-  // NEVER fall to "Loading chat..." when initialUrl exists (that would show 2 empty panels)
+  // CRITICAL: Show creating/fetching/chunking overlay IMMEDIATELY when URL exists but no repo ID yet
+  // This MUST come before the loading check to prevent "Loading chat..." being shown
   if (initialUrl && !repoIdFromUrl) {
-    // Still creating - show overlay with current stage from status polling
-    const tempStage = (currentStage ?? 'creating') as 'creating' | 'fetching' | 'chunking' | 'embedding' | 'saving' | 'done' | null;
     const tempStatus = {
       repositoryId: 'temp',
       indexStatus: 'INDEXING' as const,
@@ -236,7 +162,7 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
       chunkCount: chunksTotal,
       chunksTotal,
       chunksProcessed,
-      indexingStage: tempStage,
+      indexingStage: currentStage,
       indexingDetail,
       indexedAt: null,
       errorMessage: urlStatus?.errorMessage ?? null,
@@ -280,8 +206,10 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
     );
   }
 
-  // Only show "Loading chat..." when NO initialUrl AND NO repoIdFromUrl (real loading, not creating case)
-  if (!repo || repoQuery.isLoading) {
+  const repo = repoQuery.data;
+
+  // Only show "Loading chat..." when !repo && !isLoading (no initialUrl)
+  if (!repo) {
     return (
       <AppShell title="Loading chat…">
         <div className="grid flex-1 gap-4 p-4 md:grid-cols-[18rem_1fr]">
