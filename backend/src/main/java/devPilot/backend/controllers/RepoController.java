@@ -40,7 +40,8 @@ public class RepoController {
 
     @PostMapping("/analyze")
     public ResponseEntity<RepositoryResponse> analyze(
-            @RequestBody @jakarta.validation.Valid AnalyzeRepoRequest request) {
+            @RequestBody @jakarta.validation.Valid AnalyzeRepoRequest request,
+            @RequestParam(defaultValue = "false") boolean force) {
         String value = request.repoUrl().trim();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("^(?:https://github\\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\\.git)?/?$")
@@ -53,17 +54,21 @@ public class RepoController {
         String owner = matcher.group(1);
         String name = matcher.group(2);
 
-        Repository repo = repoService.createOrGetCreatingRepository(workspaceId, owner, name);
-        if ("creating".equals(repo.getIndexingStage())) {
+        RepoService.AnalyzeDecision decision = repoService.prepareAnalyze(workspaceId, owner, name, force);
+        Repository repo = decision.repository();
+        if (decision.shouldStart()) {
             CompletableFuture.runAsync(() -> {
                 try {
-                    repoService.analyzeAndStartIndexing(workspaceId, owner, name);
+                    repoService.analyzeAndStartIndexing(workspaceId, owner, name, repo.getId(), force);
                 } catch (Exception e) {
                     log.error("Background analyze failed for {}/{}: {}", owner, name, e.getMessage(), e);
                 }
             });
         }
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(repoService.toResponse(repo));
+        HttpStatus responseStatus = repo.getIndexStatus() == devPilot.backend.entity.IndexStatus.INDEXING
+                ? HttpStatus.ACCEPTED
+                : (decision.shouldStart() ? HttpStatus.ACCEPTED : HttpStatus.OK);
+        return ResponseEntity.status(responseStatus).body(repoService.toResponse(repo));
     }
 
     @GetMapping("/analyze/status")

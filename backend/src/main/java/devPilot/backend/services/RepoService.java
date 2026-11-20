@@ -1,10 +1,14 @@
 package devPilot.backend.services;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,9 +28,12 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @Slf4j
 public class RepoService {
+    public record AnalyzeDecision(Repository repository, boolean shouldStart) {}
+
     private final RepositoryRepository repositoryRepository;
     private final GithubApiClient gitHubApiClient;
     private final IndexingService indexingService;
+    private final Set<String> analyzeTasks = ConcurrentHashMap.newKeySet();
 
     @Transactional
     public Repository analyzePublicRepo(UUID userId, String owner, String name) {
@@ -109,14 +116,26 @@ public class RepoService {
     }
 
     @Transactional
-    public Repository createOrGetCreatingRepository(UUID userId, String owner, String name) {
+    public synchronized AnalyzeDecision prepareAnalyze(UUID userId, String owner, String name, boolean force) {
         Repository existing = repositoryRepository.findByUserIdOrderByFullNameAsc(userId).stream()
                 .filter(repo -> repo.getOwner().equalsIgnoreCase(owner)
                         && repo.getName().equalsIgnoreCase(name))
                 .findFirst()
                 .orElse(null);
         if (existing != null) {
-            return existing;
+            if (existing.getIndexStatus() == IndexStatus.READY && !force) {
+                return new AnalyzeDecision(existing, false);
+            }
+            Instant recentCutoff = Instant.now().minus(Duration.ofMinutes(10));
+            boolean recentlyUpdated = existing.getUpdatedAt() != null
+                    && !existing.getUpdatedAt().isBefore(recentCutoff);
+            boolean active = existing.getIndexStatus() == IndexStatus.INDEXING
+                    && (recentlyUpdated || indexingService.isIndexingActive(existing.getId()));
+            if (active) {
+                log.info("Analyze already active for {}/{}, returning existing repository", owner, name);
+                return new AnalyzeDecision(existing, false);
+            }
+            return new AnalyzeDecision(existing, true);
         }
 
         Repository repo = new Repository();
@@ -129,7 +148,7 @@ public class RepoService {
         repo.setIndexStatus(IndexStatus.INDEXING);
         repo.setIndexingStage("creating");
         repo.setIndexingDetail("Creating repo row...");
-        return repositoryRepository.save(repo);
+        return new AnalyzeDecision(repositoryRepository.save(repo), true);
     }
 
     private static long placeholderGithubId(String owner, String name) {
@@ -141,8 +160,29 @@ public class RepoService {
     /**
      * Background task: fetch GitHub metadata, create repo, start indexing
      */
-    public void analyzeAndStartIndexing(UUID userId, String owner, String name) {
+    public void analyzeAndStartIndexing(UUID userId, String owner, String name, UUID repoId, boolean force) {
+        String taskKey = userId + ":" + owner.toLowerCase(Locale.ROOT) + "/" + name.toLowerCase(Locale.ROOT);
+        if (!analyzeTasks.add(taskKey)) {
+            log.info("Analyze already running for {}/{}, skipping duplicate", owner, name);
+            return;
+        }
         try {
+            Repository current = repositoryRepository.findByIdAndUserId(repoId, userId).orElse(null);
+            if (current == null) return;
+            if (current.getIndexStatus() == IndexStatus.READY && !force) {
+                log.info("Repository {}/{} is already ready, skipping analyze", owner, name);
+                return;
+            }
+            Instant recentCutoff = Instant.now().minus(Duration.ofMinutes(10));
+            boolean recentlyUpdated = current.getUpdatedAt() != null
+                    && !current.getUpdatedAt().isBefore(recentCutoff);
+            if (current.getIndexStatus() == IndexStatus.INDEXING
+                    && !"creating".equals(current.getIndexingStage())
+                    && (recentlyUpdated || indexingService.isIndexingActive(repoId))) {
+                log.info("Repository {}/{} is already indexing, skipping analyze", owner, name);
+                return;
+            }
+
             var remote = gitHubApiClient.getRepository(owner, name);
             Long githubRepoId = toLong(remote.get("id"));
 
@@ -178,6 +218,8 @@ public class RepoService {
             indexingService.indexAsync(repo.getId(), userId);
         } catch (Exception e) {
             log.error("Background analyze failed for {}/{}: {}", owner, name, e.getMessage(), e);
+        } finally {
+            analyzeTasks.remove(taskKey);
         }
     }
 

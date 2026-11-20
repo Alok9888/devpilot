@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -26,7 +27,6 @@ import org.springframework.scheduling.annotation.Async;
 
 import devPilot.backend.entity.IndexStatus;
 import devPilot.backend.entity.Repository;
-import devPilot.backend.exceptions.BadRequestException;
 import devPilot.backend.exceptions.NotFoundException;
 import devPilot.backend.repository.RepositoryRepository;
 import devPilot.backend.services.ai.RagSettings;
@@ -46,6 +46,9 @@ public class IndexingService {
 
     private static final int MAX_RETRIES = 3;
     private static final long BASE_RETRY_DELAY_MS = 2000;
+    private static final long INDEX_LOCK_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(15);
+
+    private final ConcurrentHashMap<UUID, IndexingLock> indexingSet = new ConcurrentHashMap<>();
 
     private final RepositoryRepository repositoryRepository;
     private final GithubApiClient gitHubApiClient;
@@ -60,9 +63,43 @@ public class IndexingService {
 
     private boolean embeddingFailed = false;
 
+    private static final class IndexingLock {
+        private volatile long lastProgressAt = System.currentTimeMillis();
+    }
+
+    private IndexingLock activeLock(UUID repoId) {
+        IndexingLock lock = indexingSet.get(repoId);
+        if (lock != null && System.currentTimeMillis() - lock.lastProgressAt > INDEX_LOCK_TIMEOUT_MS) {
+            if (indexingSet.remove(repoId, lock)) {
+                log.warn("Indexing lock expired after 15 minutes without progress repoId={}", repoId);
+            }
+            return null;
+        }
+        return lock;
+    }
+
+    private void scheduleStaleLockCheck(UUID repoId, IndexingLock lock) {
+        CompletableFuture.delayedExecutor(1, TimeUnit.MINUTES).execute(() -> {
+            if (indexingSet.get(repoId) != lock) return;
+            if (System.currentTimeMillis() - lock.lastProgressAt > INDEX_LOCK_TIMEOUT_MS) {
+                if (indexingSet.remove(repoId, lock)) {
+                    log.warn("Indexing lock expired after 15 minutes without progress repoId={}", repoId);
+                }
+                return;
+            }
+            scheduleStaleLockCheck(repoId, lock);
+        });
+    }
+
+    public boolean isIndexingActive(UUID repoId) {
+        return activeLock(repoId) != null;
+    }
+
     // Helper to update repo indexing status with stage and detail
     private void updateIndexingStatus(UUID repoId, String stage, String detail, int filesDone, int filesTotal, int chunksDone, int chunksTotal) {
         try {
+            IndexingLock lock = indexingSet.get(repoId);
+            if (lock != null) lock.lastProgressAt = System.currentTimeMillis();
             repositoryRepository.findById(repoId).ifPresent(repo -> {
                 repo.setIndexingStage(stage);
                 repo.setIndexingDetail(detail);
@@ -82,8 +119,13 @@ public class IndexingService {
         Repository repo = repositoryRepository.findByIdAndUserId(repoId, userId)
                 .orElseThrow(() -> new NotFoundException("Repository not found"));
 
+        if (activeLock(repoId) != null) {
+            log.info("Repository is already indexing, skipping duplicate repoId={}", repoId);
+            return repo;
+        }
         if (repo.getIndexStatus() == IndexStatus.INDEXING) {
-            throw new BadRequestException("Repository is already being indexed");
+            log.info("Repository is already indexing, skipping duplicate start repoId={}", repoId);
+            return repo;
         }
 
         repo.setIndexStatus(IndexStatus.INDEXING);
@@ -101,12 +143,35 @@ public class IndexingService {
 
     @Async("indexingExecutor")
      public void indexAsync(UUID repoId, UUID userId) {
+        IndexingLock newLock = new IndexingLock();
+        IndexingLock existingLock = activeLock(repoId);
+        if (existingLock != null) {
+            log.info("Repository is already indexing, skipping duplicate repoId={}", repoId);
+            return;
+        }
+        existingLock = indexingSet.putIfAbsent(repoId, newLock);
+        if (existingLock != null) {
+            existingLock = activeLock(repoId);
+            if (existingLock != null) {
+                log.info("Repository is already indexing, skipping duplicate repoId={}", repoId);
+                return;
+            }
+            existingLock = indexingSet.putIfAbsent(repoId, newLock);
+            if (existingLock != null) {
+                log.info("Repository is already indexing, skipping duplicate repoId={}", repoId);
+                return;
+            }
+        }
+
+        scheduleStaleLockCheck(repoId, newLock);
         long startTime = System.currentTimeMillis();
         try {
             doIndex(repoId, userId, startTime);
         } catch (Exception ex) {
             log.error("Indexing failed for repo {}", repoId, ex);
             markFailed(repoId, ex.getMessage());
+        } finally {
+            indexingSet.remove(repoId, newLock);
         }
     }
 
