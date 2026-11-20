@@ -1,7 +1,7 @@
 import { getApiBaseUrl, getWorkspaceId, ApiError, type ChatMessage } from "@/lib/api";
 
 const RESPONSE_TIMEOUT_MS = 20_000;
-const STREAM_IDLE_TIMEOUT_MS = 110_000;
+const STREAM_IDLE_TIMEOUT_MS = 10_000; // 10s idle timeout per task requirements
 
 export type StreamChatHandlers = {
   onUserMessage?: (message: ChatMessage) => void;
@@ -172,11 +172,17 @@ export async function streamChatMessage(
       }
     }
 
-    if (streamError) throw streamError;
-    if (!receivedOutcome || !receivedDone) {
-      throw new Error("The chat stream ended without a reply or terminal event. Please try again.");
+    if (streamError) {
+      // Call onDone even on error to clear streaming state
+      handlers.onDone?.();
+      throw streamError;
     }
-    if (!receivedDone) handlers.onDone?.();
+    // Stream ended - call onDone to clear streaming state
+    handlers.onDone?.();
+    // Then check if we actually got a response
+    if (!receivedOutcome) {
+      throw new Error("The chat stream ended without a reply. Please try again.");
+    }
   } catch (err) {
     if (timedOut === "response") {
       throw new Error("Chat timed out before the server opened the stream. Please try again.");
