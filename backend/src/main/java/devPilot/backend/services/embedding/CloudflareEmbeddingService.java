@@ -57,10 +57,23 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
     public CloudflareEmbeddingService(
             Environment env,
             JdbcTemplate jdbcTemplate) {
-        this.account_id = env.getProperty("CLOUDFLARE_ACCOUNT_ID");
-        this.api_token = env.getProperty("CLOUDFLARE_API_TOKEN");
+        // Try Environment.getProperty first, fall back to System.getenv if null
+        String accountId = env.getProperty("CLOUDFLARE_ACCOUNT_ID");
+        if (accountId == null) {
+            accountId = System.getenv("CLOUDFLARE_ACCOUNT_ID");
+        }
+        String apiToken = env.getProperty("CLOUDFLARE_API_TOKEN");
+        if (apiToken == null) {
+            apiToken = System.getenv("CLOUDFLARE_API_TOKEN");
+        }
+        this.account_id = accountId;
+        this.api_token = apiToken;
         this.jdbcTemplate = jdbcTemplate;
         // Schema initialization is handled by PgVectorStore.initializeSchema(true)
+
+        // Log startup info - accountId null check only, never log token value
+        log.info("CloudflareEmbeddingService initialized: accountId is {}", this.account_id == null ? "null" : "not null");
+        log.info("CloudflareEmbeddingService initialized: apiToken length is {}", this.api_token == null ? "null" : this.api_token.length());
     }
 
     /**
