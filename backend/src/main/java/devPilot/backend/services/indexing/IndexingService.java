@@ -164,6 +164,7 @@ public class IndexingService {
         repo.setFilesProcessed(result.allFiles.size());
         repo.setChunkCount(totalChunks);
         repo.setIndexedAt(Instant.now());
+        repo.setIndexStatus(IndexStatus.READY);
         repositoryRepository.save(repo);
 
         long duration = System.currentTimeMillis() - startTime;
