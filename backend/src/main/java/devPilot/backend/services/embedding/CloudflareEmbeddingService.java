@@ -9,7 +9,6 @@ import org.springframework.ai.document.Document;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -36,13 +35,12 @@ import org.slf4j.LoggerFactory;
 public class CloudflareEmbeddingService implements EmbeddingModel {
 
     private static final Logger log = LoggerFactory.getLogger(CloudflareEmbeddingService.class);
-    private static final String CLOUDFLARE_BASE_URL = "https://api.cloudflare.com/client/v4/accounts";
+    private static final String CLOUDFLARE_ACCOUNT_ID = "cdf43a252db0973fb702921884aec43b";
     private static final String EMBEDDING_ENDPOINT = "/ai/run/@cf/baai/bge-small-en-v1.5";
     private static final int MODEL_DIMENSIONS = 384;
     private static final int MAX_RETRIES = 3;
     private static final int[] RETRY_BACKOFF_MS = {2000, 4000, 8000};
 
-    private final String account_id;
     private final String api_token;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -55,25 +53,14 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
     private final ThreadLocal<AtomicInteger> retryCount = ThreadLocal.withInitial(() -> new AtomicInteger(0));
 
     public CloudflareEmbeddingService(
-            Environment env,
             JdbcTemplate jdbcTemplate) {
-        // Try Environment.getProperty first, fall back to System.getenv if null
-        String accountId = env.getProperty("CLOUDFLARE_ACCOUNT_ID");
-        if (accountId == null) {
-            accountId = System.getenv("CLOUDFLARE_ACCOUNT_ID");
-        }
-        String apiToken = env.getProperty("CLOUDFLARE_API_TOKEN");
-        if (apiToken == null) {
-            apiToken = System.getenv("CLOUDFLARE_API_TOKEN");
-        }
-        this.account_id = accountId;
-        this.api_token = apiToken;
+        // Hardcoded Cloudflare Account ID
+        this.api_token = System.getenv("CLOUDFLARE_API_TOKEN");
         this.jdbcTemplate = jdbcTemplate;
         // Schema initialization is handled by PgVectorStore.initializeSchema(true)
 
-        // Log startup info - accountId null check only, never log token value
-        log.info("CloudflareEmbeddingService initialized: accountId is {}", this.account_id == null ? "null" : "not null");
-        log.info("CloudflareEmbeddingService initialized: apiToken length is {}", this.api_token == null ? "null" : this.api_token.length());
+        // Log startup info
+        log.info("CloudflareEmbeddingService initialized: accountId length=" + CLOUDFLARE_ACCOUNT_ID.length());
     }
 
     /**
@@ -182,7 +169,7 @@ public class CloudflareEmbeddingService implements EmbeddingModel {
 
     private List<float[]> callCloudflareAPI(List<String> texts) {
         try {
-            String url = CLOUDFLARE_BASE_URL + "/" + account_id + EMBEDDING_ENDPOINT;
+            String url = "https://api.cloudflare.com/client/v4/accounts/" + CLOUDFLARE_ACCOUNT_ID + EMBEDDING_ENDPOINT;
 
             // Build request body
             ObjectNode requestBody = objectMapper.createObjectNode();
