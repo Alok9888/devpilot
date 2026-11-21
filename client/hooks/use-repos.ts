@@ -56,7 +56,9 @@ export function useIndexStatus(repoId: string, enabled = false) {
     queryFn: () => api.indexStatus(repoId),
     enabled: Boolean(repoId) && enabled,
     refetchInterval: (query) =>
-      query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
+      query.state.data?.indexStatus === "READY" || query.state.data?.indexStatus === "FAILED"
+        ? false
+        : INDEXING_POLL_MS,
   });
 }
 
@@ -66,7 +68,9 @@ export function useIndexStatusByUrl(url: string, enabled = false) {
     queryFn: () => api.indexStatusByUrl(url),
     enabled: Boolean(url) && enabled,
     refetchInterval: (query) =>
-      query.state.data?.indexStatus === "INDEXING" ? INDEXING_POLL_MS : false,
+      query.state.data?.indexStatus === "READY" || query.state.data?.indexStatus === "FAILED"
+        ? false
+        : INDEXING_POLL_MS,
   });
 }
 

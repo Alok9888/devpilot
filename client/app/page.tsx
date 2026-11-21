@@ -20,7 +20,6 @@ export default function HomePage() {
   function analyze() {
     if (hasClickedRef.current) return;
 
-    setError("");
     const match = repoUrl.trim().match(/github\.com\/([^/]+)\/([^/?#]+)/i);
     if (!match) {
       hasClickedRef.current = false;
@@ -31,8 +30,9 @@ export default function HomePage() {
 
     const slug = `${match[1]}-${match[2].replace(/\.git$/, "")}`.toLowerCase();
     hasClickedRef.current = true;
-    setIsClicked(true);
     router.push(`/chat/${slug}?url=${encodeURIComponent(repoUrl.trim())}`);
+    setIsClicked(true);
+    setError("");
     void api.analyzeRepo(repoUrl.trim()).catch((err) => {
       setError(err instanceof Error ? err.message : "Could not analyze repository");
     });

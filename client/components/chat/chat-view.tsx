@@ -32,10 +32,9 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
 
   // Use URL-based status polling when we have initialUrl but no repo ID yet
   const urlStatusQuery = useIndexStatusByUrl(initialUrl ?? "", Boolean(initialUrl && !effectiveRepoId));
-  const repoStatusQuery = useIndexStatus(
-    effectiveRepoId,
-    Boolean(effectiveRepoId && (repoQuery.data?.indexStatus === "INDEXING" || repoQuery.data?.indexStatus === "PENDING"))
-  );
+  // Keep polling the status endpoint until it reports READY, even if the
+  // repository detail query finishes first.
+  const repoStatusQuery = useIndexStatus(effectiveRepoId, Boolean(effectiveRepoId));
 
   // Choose which status to use
   const statusQuery = initialUrl && !effectiveRepoId ? urlStatusQuery : repoStatusQuery;
@@ -45,8 +44,11 @@ export function ChatView({ repoId, initialUrl }: { repoId: string; initialUrl?: 
     }
   }, [urlStatusQuery.data?.repositoryId]);
 
-  const indexStatus =
-    statusQuery.data?.indexStatus ?? repoQuery.data?.indexStatus;
+  const statusIndex = statusQuery.data?.indexStatus;
+  const repositoryIndex = repoQuery.data?.indexStatus;
+  const indexStatus = statusIndex === "READY" || repositoryIndex === "READY"
+    ? "READY"
+    : statusIndex ?? repositoryIndex;
   const ready = indexStatus === "READY";
 
   const sessionsQuery = useChatSessions(effectiveRepoId, ready);
